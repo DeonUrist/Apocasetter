@@ -17,8 +17,31 @@ that opts in and lets you edit its config live, without leaving the game.
 
 ## Installation
 
+The mod is two parts: the plugin DLL **and** the GUI theme folder (`theme.json` + the PNG 9-slices that skin the window,
+buttons, categories, scrollbars and text fields). Both must be installed together, in this layout:
+
+```
+Apocalypter\
+└── BepInEx\
+    └── plugins\
+        └── Apocasetter\
+            ├── Apocasetter.dll
+            └── theme\
+                ├── theme.json
+                ├── window.png
+                ├── panel.png
+                ├── button.png / button_hover.png / button_active.png
+                ├── category.png / category_hover.png / category_selected.png
+                ├── scrollbar.png / scrollbar_thumb.png
+                └── textfield.png
+```
+
 1. Install [BepInEx 5.x](https://github.com/BepInEx/BepInEx/releases) (win_x64) into the game folder and run the game once.
-2. Copy `Apocasetter.dll` and the `theme` folder to `BepInEx\plugins\Apocasetter\`.
+2. Create `BepInEx\plugins\Apocasetter\` and copy `Apocasetter.dll` **and the whole `theme` folder** into it.
+
+The theme is looked up relative to the DLL (`<plugin dir>\theme\theme.json`). Without it the mod still works but falls back to the
+plain Unity IMGUI skin, and the log shows `No theme.json at ...`. Other mods that use the shared GUI (e.g. Apocaspawner) get their
+look from this same theme folder, so they need it too.
 
 Config: `BepInEx\config\com.denis.apocalypter.apocasetter.cfg` — `[Keys] ToggleMenu` (default `F6`) opens the window from anywhere.
 
