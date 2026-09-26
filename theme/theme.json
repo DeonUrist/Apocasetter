@@ -1,0 +1,26 @@
+{
+  "font": "",
+  "fontSize": 14,
+  "textColor": "#E8DCC0FF",
+  "textColorHover": "#FFF4DCFF",
+  "headerTextColor": "#F0C070FF",
+
+  "window":           { "texture": "window.png",            "border": [8, 8, 8, 8] },
+  "leftPanel":        { "texture": "panel.png",             "border": [6, 6, 6, 6] },
+  "rightPanel":       { "texture": "panel.png",             "border": [6, 6, 6, 6] },
+  "button":           { "texture": "button.png",            "border": [6, 6, 6, 6] },
+  "buttonHover":      { "texture": "button_hover.png",      "border": [6, 6, 6, 6] },
+  "buttonActive":     { "texture": "button_active.png",     "border": [6, 6, 6, 6] },
+  "category":         { "texture": "category.png",          "border": [6, 6, 6, 6] },
+  "categoryHover":    { "texture": "category_hover.png",    "border": [6, 6, 6, 6] },
+  "categorySelected": { "texture": "category_selected.png", "border": [6, 6, 6, 6] },
+  "textField":        { "texture": "textfield.png",         "border": [6, 6, 6, 6] },
+  "toggle":           { "texture": "" },
+  "toggleOn":         { "texture": "" },
+  "scrollbar":        { "texture": "scrollbar.png",         "border": [3, 3, 3, 3] },
+  "scrollbarThumb":   { "texture": "scrollbar_thumb.png",   "border": [3, 3, 3, 3] },
+
+  "windowPadding": [12, 12, 42, 12],
+  "buttonHeight": 26,
+  "categoryHeight": 26
+}

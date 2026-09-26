@@ -1,0 +1,12 @@
+# Build output
+bin/
+obj/
+*.dll
+*.pdb
+*.user
+.vs/
+.vscode/
+*.swp
+# BepInEx / game artefacts
+LogOutput.log
+*.cfg

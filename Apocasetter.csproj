@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>Apocasetter</AssemblyName>
+    <RootNamespace>Apocasetter</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <GameDir Condition="'$(GameDir)' == ''">E:\SteamLibrary\steamapps\common\Apocalypter</GameDir>
+    <ManagedDir>$(GameDir)\Apocalypter_Data\Managed</ManagedDir>
+    <BepInExCore>$(GameDir)\BepInEx\core</BepInExCore>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="BepInEx"><HintPath>$(BepInExCore)\BepInEx.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="0Harmony"><HintPath>$(BepInExCore)\0Harmony.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine"><HintPath>$(ManagedDir)\UnityEngine.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(ManagedDir)\UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.InputSystem"><HintPath>$(ManagedDir)\Unity.InputSystem.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Assembly-CSharp"><HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.AudioModule"><HintPath>$(ManagedDir)\UnityEngine.AudioModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(ManagedDir)\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.ImageConversionModule"><HintPath>$(ManagedDir)\UnityEngine.ImageConversionModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(ManagedDir)\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.UI"><HintPath>$(ManagedDir)\UnityEngine.UI.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.UIModule"><HintPath>$(ManagedDir)\UnityEngine.UIModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Unity.TextMeshPro"><HintPath>$(ManagedDir)\Unity.TextMeshPro.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="PlayMaker"><HintPath>$(ManagedDir)\PlayMaker.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+  <Target Name="DeployToGame" AfterTargets="Build">
+    <Copy SourceFiles="$(OutDir)$(AssemblyName).dll" DestinationFolder="$(GameDir)\BepInEx\plugins\Apocasetter" />
+    <ItemGroup><ThemeFiles Include="theme\**\*" /></ItemGroup>
+    <Copy SourceFiles="@(ThemeFiles)" DestinationFolder="$(GameDir)\BepInEx\plugins\Apocasetter\theme" />
+    <Message Importance="high" Text="Deployed $(AssemblyName).dll to $(GameDir)\BepInEx\plugins\Apocasetter" />
+  </Target>
+</Project>
