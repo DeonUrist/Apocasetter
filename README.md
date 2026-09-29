@@ -43,7 +43,8 @@ The theme is looked up relative to the DLL (`<plugin dir>\theme\theme.json`). Wi
 plain Unity IMGUI skin, and the log shows `No theme.json at ...`. Other mods that use the shared GUI (e.g. Apocaspawner) get their
 look from this same theme folder, so they need it too.
 
-Config: `BepInEx\config\com.denis.apocalypter.apocasetter.cfg` — `[Keys] ToggleMenu` (default `F6`) opens the window from anywhere.
+Config: `BepInEx\config\com.denis.apocalypter.apocasetter.cfg` — `[Keys] ToggleMenu` (default `F6`) opens the window from anywhere;
+`[General] RestoreCursorAfterAltTab` (default `true`) re-locks and hides the mouse cursor when the game regains focus after Alt+Tab if it was locked before (Unity releases the lock on focus loss and the game never re-applies it, so the cursor would otherwise stay on screen).
 
 ## Making your mod appear in the menu
 

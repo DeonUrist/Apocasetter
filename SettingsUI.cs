@@ -86,6 +86,10 @@ namespace Apocasetter
         private CursorLockMode _prevLock;
         private bool _prevVisible;
         private bool _unblockNextFrame;
+        // cursor state seen while the window had focus, re-applied after Alt+Tab (Unity releases the lock on focus loss)
+        private CursorLockMode _lastLock = CursorLockMode.None;
+        private bool _lastVisible = true;
+        private int _relockFrames;
 
         private readonly Dictionary<ConfigEntryBase, string> _pending = new Dictionary<ConfigEntryBase, string>();
         private readonly Dictionary<ConfigEntryBase, string> _errors = new Dictionary<ConfigEntryBase, string>();
@@ -104,9 +108,36 @@ namespace Apocasetter
 
         private void LateUpdate()
         {
-            if (!_open) return;
-            Cursor.lockState = CursorLockMode.None;
-            Cursor.visible = true;
+            if (_open)
+            {
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+                return;
+            }
+            if (_relockFrames > 0)
+            {
+                _relockFrames--;
+                if (InputBlocker.Active) { _relockFrames = 0; return; } // another mod's UI took over meanwhile
+                // set None first so Unity treats it as a change even if it still reports the old value
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.lockState = _lastLock;
+                Cursor.visible = _lastVisible;
+                if (_relockFrames == 0) Plugin.Log.LogInfo("Cursor re-locked after focus regain (" + _lastLock + ")");
+                return;
+            }
+            if (Application.isFocused && !InputBlocker.Active)
+            {
+                _lastLock = Cursor.lockState;
+                _lastVisible = Cursor.visible;
+            }
+        }
+
+        private void OnApplicationFocus(bool focus)
+        {
+            if (!focus) { _relockFrames = 0; return; }
+            if (!_open && !InputBlocker.Active && _lastLock != CursorLockMode.None
+                && Plugin.RestoreCursorEntry != null && Plugin.RestoreCursorEntry.Value)
+                _relockFrames = 3; // apply over a few frames: the lock set in the focus frame itself is often ignored
         }
 
         public void Open() { if (!_open) Toggle(); }

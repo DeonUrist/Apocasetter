@@ -27,11 +27,12 @@ namespace Apocasetter
     {
         public const string GUID = "com.denis.apocalypter.apocasetter";
         public const string NAME = "Apocasetter";
-        public const string VERSION = "1.0.0";
+        public const string VERSION = "1.0.1";
 
         public static ManualLogSource Log;
         public static string PluginPath;
         public static ConfigEntry<Key> MenuKeyEntry;
+        public static ConfigEntry<bool> RestoreCursorEntry;
         private static GameObject _runner;
 
         private void Awake()
@@ -39,6 +40,8 @@ namespace Apocasetter
             Log = Logger;
             PluginPath = Info.Location;
             MenuKeyEntry = Config.Bind("Keys", "ToggleMenu", Key.F6, "Hotkey that opens/closes the Mods window from anywhere (the MODS menu button always works)");
+            RestoreCursorEntry = Config.Bind("General", "RestoreCursorAfterAltTab", true,
+                "Re-lock and hide the mouse cursor when the game window regains focus (Alt+Tab) if it was locked before. Unity drops the lock on focus loss and the game only sets it on menu transitions, so the cursor otherwise stays on screen.");
 
             SceneManager.sceneLoaded += (s, m) => EnsureRunner("scene " + s.name);
             InputBlocker.Install();
