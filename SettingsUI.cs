@@ -351,7 +351,7 @@ namespace Apocasetter
             GUILayout.Space(2);
         }
 
-        private static float ParseF(string s, float fb) { float f; return float.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out f) ? f : fb; }
+        private static float ParseF(string s, float fb) { float f; return s != null && float.TryParse(s.Trim().Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out f) ? f : fb; }
 
         private void Cycle(ConfigEntryBase e, string[] options, string cur, int dir)
         {
@@ -396,9 +396,18 @@ namespace Apocasetter
             catch (Exception ex) { _errors[e] = ex.Message; }
         }
 
+        // BepInEx parses floats with the invariant culture and AllowThousands: "0,5" would silently become 5. Our settings never use
+        // thousands separators, so a comma typed on a decimal-comma PC is taken as the decimal point.
+        private static string Normalize(ConfigEntryBase e, string value)
+        {
+            if (value == null) return null;
+            var t = e.SettingType;
+            return t == typeof(float) || t == typeof(double) || t == typeof(decimal) ? value.Trim().Replace(',', '.') : value;
+        }
+
         private void SetSerialized(ConfigEntryBase e, string value)
         {
-            try { e.SetSerializedValue(value); _errors.Remove(e); _pending.Remove(e); Persist(e); }
+            try { e.SetSerializedValue(Normalize(e, value)); _errors.Remove(e); _pending.Remove(e); Persist(e); }
             catch (Exception ex) { _errors[e] = ex.Message; }
         }
 
@@ -407,7 +416,7 @@ namespace Apocasetter
             int ok = 0, bad = 0;
             foreach (var kv in _pending.ToList())
             {
-                try { kv.Key.SetSerializedValue(kv.Value); _errors.Remove(kv.Key); _pending.Remove(kv.Key); ok++; }
+                try { kv.Key.SetSerializedValue(Normalize(kv.Key, kv.Value)); _errors.Remove(kv.Key); _pending.Remove(kv.Key); ok++; }
                 catch (Exception ex) { _errors[kv.Key] = ex.Message; bad++; }
             }
             foreach (var m in ModCatalog.Mods()) SaveFile(m.Config);
