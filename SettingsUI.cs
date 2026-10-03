@@ -969,8 +969,13 @@ namespace Apocasetter
             }
             else if (ranged)
             {
-                float fmin = Convert.ToSingle(Range0(e)), fmax = Convert.ToSingle(Range1(e));
-                float fv = isPending ? ParseF(pending, Convert.ToSingle(e.BoxedValue)) : Convert.ToSingle(e.BoxedValue);
+                // bounds straight from the AcceptableValueRange objects: Range0/Range1 are invariant text ("0.5"), and parsing that back with the
+                // player's culture threw (fr/ru/pl/pt-PT) or read 0.5 as 5 (de/pt-BR) → the whole page failed for mods with a decimal range
+                object ra, rb;
+                Range(e, out ra, out rb);
+                float fmin = Convert.ToSingle(ra, CultureInfo.InvariantCulture), fmax = Convert.ToSingle(rb, CultureInfo.InvariantCulture);
+                float cur = Convert.ToSingle(e.BoxedValue, CultureInfo.InvariantCulture);
+                float fv = isPending ? ParseF(pending, cur) : cur;
                 var field = new Rect(right - U(76), ctrl.y + U(2), U(76), U(34));
                 var rail = new Rect(field.x - U(184), ctrl.y + U(17), U(168), U(4));
                 S.Fill(new Rect(rail.x, rail.y + U(1), rail.width, rail.height), Color.black);

@@ -183,6 +183,8 @@ namespace Apocasetter
         }
 
         // ---------------------------------------------------------------- download + stage
+        private static string Host(string url) { try { return new Uri(url).Host; } catch { return url ?? ""; } }
+
         public static IEnumerator Download(Dictionary<string, object> op, IndexMod im)
         {
             var guid = MiniJson.Str(op, "guid");
@@ -193,14 +195,27 @@ namespace Apocasetter
             var staged = Path.Combine(DataDir, "staged");
             Directory.CreateDirectory(staged);
             var file = Path.Combine(staged, Safe(im.Name) + "-" + Safe(im.Version) + ".zip");
-            var req = new UnityWebRequest(im.Zip.Url, UnityWebRequest.kHttpVerbGET);
-            req.downloadHandler = new DownloadHandlerFile(file) { removeFileOnAbort = true };
-            req.timeout = 600;
-            var send = req.SendWebRequest();
-            while (!send.isDone) { Downloading[guid] = req.downloadProgress; yield return null; }
             string error = null;
-            if (req.result != UnityWebRequest.Result.Success) error = req.error;
-            req.Dispose();
+            // GitHub's asset host answers 502/503/504 now and then: try three times, 2 s and 5 s apart
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                var req = new UnityWebRequest(im.Zip.Url, UnityWebRequest.kHttpVerbGET);
+                req.downloadHandler = new DownloadHandlerFile(file) { removeFileOnAbort = true };
+                req.timeout = 600;
+                req.SetRequestHeader("User-Agent", "Apocasetter/" + Plugin.VERSION);
+                var send = req.SendWebRequest();
+                while (!send.isDone) { Downloading[guid] = req.downloadProgress; yield return null; }
+                error = req.result == UnityWebRequest.Result.Success ? null : req.error;
+                long code = req.responseCode;
+                bool retry = error != null && (req.result == UnityWebRequest.Result.ConnectionError || code == 429 || code >= 500);
+                if (error != null)
+                    Plugin.Log.LogWarning("Download of " + im.Name + " (attempt " + attempt + "/3): " + error + " · HTTP " + code + " · server '" + (req.GetResponseHeader("Server") ?? "")
+                        + "' · from " + Host(req.url) + (retry && attempt < 3 ? " · retrying" : ""));
+                req.Dispose();
+                if (!retry || attempt == 3) break;
+                float until = Time.realtimeSinceStartup + (attempt == 1 ? 2f : 5f);
+                while (Time.realtimeSinceStartup < until) yield return null;
+            }
             if (error == null)
             {
                 try
