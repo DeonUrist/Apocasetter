@@ -27,13 +27,15 @@ namespace Apocasetter
     {
         public const string GUID = "com.denis.apocalypter.apocasetter";
         public const string NAME = "Apocasetter";
-        public const string VERSION = "2.0.3";
+        public const string VERSION = "2.0.4";
 
         public static ManualLogSource Log;
         public static string PluginPath;
         public static ConfigEntry<Key> MenuKeyEntry;
         public static ConfigEntry<bool> RestoreCursorEntry;
-        public static ConfigEntry<bool> CheckUpdatesEntry, UpdateNoticeEntry;
+        public static ConfigEntry<bool> CheckUpdatesEntry, UpdateNoticeEntry, VerboseLogEntry;
+        public static bool IsVerbose { get { return VerboseLogEntry != null && VerboseLogEntry.Value; } }
+        public static void Verbose(string msg) { if (IsVerbose) Log.LogInfo("[verbose] " + msg); }
         private static GameObject _runner;
 
         private void Awake()
@@ -48,6 +50,8 @@ namespace Apocasetter
                 "Once per game start (results kept for 6 hours), download the Apocasetter index from GitHub and compare it with your installed mods. Nothing about you or your PC is sent.");
             UpdateNoticeEntry = Config.Bind("Updates", "UpdateNotice", true,
                 "Show a badge on the MODS button and a short message on the title screen when an update is found.");
+            VerboseLogEntry = Config.Bind("Debug", "VerboseLog", false,
+                "Write extra lines to BepInEx\\LogOutput.log while the Mods window is open: every click and whether the window received it, the mouse cursor state, screen size and scaling, and which other mods draw on screen. Turn it on only when you are asked for a log, then send LogOutput.log.");
 
             SceneManager.sceneLoaded += (s, m) => EnsureRunner("scene " + s.name);
             InputBlocker.Install();

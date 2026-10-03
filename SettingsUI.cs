@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using BepInEx;
@@ -45,6 +46,14 @@ namespace Apocasetter
         private bool _toastDismissed;
         private Dictionary<string, List<string>> _keyUsers;
 
+        // diagnostics (2.0.4): clicks that never reach the window, drawing errors, VerboseLog
+        private int _pressFrame = -1, _missedClicks, _drawErrors, _evDown, _evUp, _evRepaint, _evLayout, _evOther;
+        private Vector2 _pressPos;
+        private bool _gotMouseDown, _missWarned, _cursorForcedLogged;
+        private float _nextVerbose;
+        private string _lastDrawError;
+        private readonly HashSet<string> _loggedErrors = new HashSet<string>();
+
         // cursor bookkeeping (1.0.1: re-lock after Alt+Tab)
         private CursorLockMode _prevLock, _lastLock = CursorLockMode.None;
         private bool _prevVisible, _lastVisible = true, _unblockNextFrame;
@@ -66,6 +75,7 @@ namespace Apocasetter
         private void Update()
         {
             if (_unblockNextFrame) { _unblockNextFrame = false; if (!_open) InputBlocker.Set(false); }
+            if (_open) TrackClicks();
             if (_open && _rebind != null) { PollRebind(); return; }
             if (Plugin.Pressed(Plugin.MenuKeyEntry.Value)) Toggle();
             else if (_open && Plugin.Pressed(Key.Escape))
@@ -139,6 +149,9 @@ namespace Apocasetter
                 Catalog.Invalidate();
                 _pending.Clear(); _errors.Clear(); _dropdown = null; _rebind = null; _removeOpen = false; _keyUsers = null;
                 _toastDismissed = true;
+                _pressFrame = -1; _missedClicks = 0; _missWarned = false; _cursorForcedLogged = false; _drawErrors = 0; _lastDrawError = null;
+                _evDown = _evUp = _evRepaint = _evLayout = _evOther = 0; _nextVerbose = Time.unscaledTime + 2f;
+                if (Plugin.IsVerbose) LogSnapshot("opened");
             }
             else
             {
@@ -167,25 +180,145 @@ namespace Apocasetter
         // ---------------------------------------------------------------- OnGUI
         private void OnGUI()
         {
-            if (!_open) { DrawMenuExtras(); return; }
+            if (!_open) { GUI.depth = 0; DrawMenuExtras(); return; }
+
+            // drawn above every other mod's OnGUI, so their controls can't take the window's clicks
+            GUI.depth = -1000;
+            var ev = Event.current;
+            var type = ev.type;
+            switch (type)
+            {
+                case EventType.MouseDown: _evDown++; _gotMouseDown = true; break;
+                case EventType.MouseUp: _evUp++; break;
+                case EventType.Repaint: _evRepaint++; break;
+                case EventType.Layout: _evLayout++; break;
+                default: _evOther++; break;
+            }
+            // OnGUI runs after every Update/LateUpdate: a game script or another mod that locks the cursor each frame can't win here
+            if ((type == EventType.Layout || type == EventType.Repaint) && (Cursor.lockState != CursorLockMode.None || !Cursor.visible))
+            {
+                if (!_cursorForcedLogged) { _cursorForcedLogged = true; Plugin.Log.LogInfo("Mods window: something keeps locking/hiding the cursor (" + Cursor.lockState + ", visible " + Cursor.visible + "); freeing it every frame"); }
+                Cursor.lockState = CursorLockMode.None; Cursor.visible = true;
+            }
+            int hotBefore = GUIUtility.hotControl;
+            var mouse = ev.mousePosition;
 
             _sc = Mathf.Clamp(Mathf.Min(Screen.width / 1280f, Screen.height / 720f), 0.6f, 4f);
             S.Ensure(_sc);
             _wx = Mathf.Round((Screen.width - WW * _sc) / 2f);
             _wy = Mathf.Round((Screen.height - WH * _sc) / 2f);
 
-            // slider released: write the value once instead of on every drag frame
-            if (_sliderDrag != null && Event.current.rawType == EventType.MouseUp)
+            try
             {
-                var e = _sliderDrag; _sliderDrag = null;
-                string v;
-                if (_pending.TryGetValue(e, out v)) SetSerialized(e, v);
-            }
-            if (Event.current.type == EventType.KeyDown && (Event.current.keyCode == KeyCode.Return || Event.current.keyCode == KeyCode.KeypadEnter) && _pending.Count > 0)
-            { ApplyPending(); Event.current.Use(); }
+                // slider released: write the value once instead of on every drag frame
+                if (_sliderDrag != null && ev.rawType == EventType.MouseUp)
+                {
+                    var e = _sliderDrag; _sliderDrag = null;
+                    string v;
+                    if (_pending.TryGetValue(e, out v)) SetSerialized(e, v);
+                }
+                if (ev.type == EventType.KeyDown && (ev.keyCode == KeyCode.Return || ev.keyCode == KeyCode.KeypadEnter) && _pending.Count > 0)
+                { ApplyPending(); ev.Use(); }
 
-            S.Fill(new Rect(0, 0, Screen.width, Screen.height), new Color(0, 0, 0, 0.55f));
-            Draw(0);
+                S.Fill(new Rect(0, 0, Screen.width, Screen.height), new Color(0, 0, 0, 0.55f));
+                Draw(0);
+            }
+            catch (ExitGUIException) { throw; }
+            catch (Exception e) { DrawError("window", e, type); }
+            finally { GUI.enabled = true; GUI.color = Color.white; GUI.contentColor = Color.white; GUI.backgroundColor = Color.white; GUI.matrix = Matrix4x4.identity; }
+
+            if (_lastDrawError != null && type == EventType.Repaint)
+            {
+                var er = R(RailX, WH - FR - 22, WW - 2 * RailX, 20);
+                S.Label(er, "Drawing error: " + _lastDrawError + "  (details in BepInEx\\LogOutput.log)", S.Small, S.Red);
+            }
+            if (Plugin.IsVerbose && (type == EventType.MouseDown || type == EventType.MouseUp))
+                Plugin.Verbose(type + " button " + ev.button + " at " + V(mouse) + " (Input.mousePosition " + V(Input.mousePosition) + ", screen " + Screen.width + "x" + Screen.height
+                    + ", window " + R(0, 0, WW, WH) + ") → " + (ev.type == EventType.Used ? "handled by the window" : "not on a control") + ", hotControl " + hotBefore + "→" + GUIUtility.hotControl
+                    + (GUI.enabled ? "" : ", GUI disabled"));
+        }
+
+        private static string V(Vector2 v) { return "(" + v.x.ToString("0", CultureInfo.InvariantCulture) + ", " + v.y.ToString("0", CultureInfo.InvariantCulture) + ")"; }
+
+        /// Logs a drawing exception once per distinct message (full stack), keeps a one-line note for the window.
+        private void DrawError(string where, Exception e, EventType type)
+        {
+            _drawErrors++;
+            _lastDrawError = e.GetType().Name + ": " + e.Message;
+            if (_loggedErrors.Add(where + "|" + _lastDrawError))
+                Plugin.Log.LogError("Mods window: error drawing " + where + " during " + type + " (shown once): " + e);
+        }
+
+        /// Runs one part of the window; an error in it is logged and the rest of the window (CLOSE included) still works.
+        private void Part(string where, Action draw)
+        {
+            var type = Event.current.type;
+            var enabled = GUI.enabled;
+            try { draw(); }
+            catch (ExitGUIException) { throw; }
+            catch (Exception e) { DrawError(where, e, type); }
+            finally { GUI.enabled = enabled; GUI.color = Color.white; GUI.contentColor = Color.white; GUI.matrix = Matrix4x4.identity; }
+        }
+
+        /// A mouse press seen by the Input System must show up as an IMGUI MouseDown within a few frames;
+        /// if it doesn't, something else (cursor lock, another mod's GUI, a modal window) is taking the clicks.
+        private void TrackClicks()
+        {
+            var mouse = Mouse.current;
+            if (_pressFrame >= 0 && Time.frameCount > _pressFrame + 3)
+            {
+                if (_gotMouseDown) _missedClicks = 0;
+                else
+                {
+                    _missedClicks++;
+                    Plugin.Verbose("Mouse pressed at " + V(_pressPos) + " (Input System, bottom-left origin) but the window got no MouseDown; cursor " + Cursor.lockState + "/" + (Cursor.visible ? "visible" : "hidden"));
+                    if (_missedClicks >= 3 && !_missWarned)
+                    {
+                        _missWarned = true;
+                        Plugin.Log.LogWarning("Mods window: clicks are not reaching the window (" + _missedClicks + " in a row). Something else takes them. Details follow; please send this log.");
+                        LogSnapshot("clicks lost");
+                    }
+                }
+                _pressFrame = -1;
+            }
+            if (mouse != null && mouse.leftButton.wasPressedThisFrame && _pressFrame < 0)
+            {
+                _pressFrame = Time.frameCount; _pressPos = mouse.position.ReadValue(); _gotMouseDown = false;
+            }
+            if (Plugin.IsVerbose && Time.unscaledTime >= _nextVerbose)
+            {
+                _nextVerbose = Time.unscaledTime + 2f;
+                Plugin.Verbose("open: cursor " + Cursor.lockState + "/" + (Cursor.visible ? "visible" : "hidden") + ", focused " + Application.isFocused + ", timeScale " + Time.timeScale
+                    + ", hotControl " + GUIUtility.hotControl + ", IMGUI events in 2 s: Layout " + _evLayout + " Repaint " + _evRepaint + " MouseDown " + _evDown + " MouseUp " + _evUp + " other " + _evOther
+                    + ", drawing errors " + _drawErrors + (_lastDrawError != null ? " (last: " + _lastDrawError + ")" : ""));
+                _evDown = _evUp = _evRepaint = _evLayout = _evOther = 0;
+            }
+        }
+
+        private void LogSnapshot(string why)
+        {
+            try
+            {
+                var log = Plugin.Log;
+                log.LogInfo("Mods window " + why + ": Apocasetter " + Plugin.VERSION + ", screen " + Screen.width + "x" + Screen.height + " " + Screen.fullScreenMode
+                    + ", display " + Display.main.systemWidth + "x" + Display.main.systemHeight + " (rendering " + Display.main.renderingWidth + "x" + Display.main.renderingHeight + "), dpi " + Screen.dpi
+                    + ", scale " + _sc.ToString("0.00", CultureInfo.InvariantCulture) + ", window " + R(0, 0, WW, WH));
+                log.LogInfo("  cursor " + Cursor.lockState + "/" + (Cursor.visible ? "visible" : "hidden") + ", focused " + Application.isFocused + ", timeScale " + Time.timeScale
+                    + ", input blocker " + InputBlocker.Active + ", EventSystems switched off " + _mutedEventSystems.Count + ", hotControl " + GUIUtility.hotControl
+                    + ", mouse device " + (Mouse.current != null ? Mouse.current.displayName : "none") + ", in game " + GameMenu.InGame + ", language " + CultureInfo.CurrentCulture.Name);
+                var gui = new List<string>();
+                foreach (var mb in FindObjectsOfType<MonoBehaviour>())
+                {
+                    if (mb == null || !mb.isActiveAndEnabled || mb == this) continue;
+                    var t = mb.GetType();
+                    if (t.GetMethod("OnGUI", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) == null) continue;
+                    var n = t.FullName + " [" + t.Assembly.GetName().Name + "] on '" + mb.gameObject.name + "'";
+                    if (!gui.Contains(n)) gui.Add(n);
+                }
+                log.LogInfo("  other scripts drawing with OnGUI: " + (gui.Count == 0 ? "none" : string.Join("; ", gui.ToArray())));
+                log.LogInfo("  plugins: " + string.Join(", ", BepInEx.Bootstrap.Chainloader.PluginInfos.Values.Where(i => i != null).Select(i => i.Metadata.Name + " " + i.Metadata.Version).ToArray()));
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Mods window snapshot: " + e.Message); }
         }
 
         /// Width (virtual units) a plank needs for its label. The label is measured as drawn, so a translation (ApocaLanguage) widens it too.
@@ -215,12 +348,12 @@ namespace Apocasetter
             bool modal = _removeOpen;
             var oldEnabled = GUI.enabled;
             if (modal) GUI.enabled = false;
-            DrawHeader(mods);
-            DrawRail(mods);
-            if (mod != null) DrawPane(mod);
-            DrawBottom(mod);
+            Part("header", () => DrawHeader(mods));
+            Part("mod list", () => DrawRail(mods));
+            if (mod != null) Part("page of " + mod.Name, () => DrawPane(mod));
+            Part("bottom bar", () => DrawBottom(mod));
             GUI.enabled = oldEnabled;
-            if (modal && mod != null) DrawRemoveDialog(mod);
+            if (modal && mod != null) Part("remove dialog", () => DrawRemoveDialog(mod));
         }
 
         // ---------------------------------------------------------------- header
@@ -232,6 +365,10 @@ namespace Apocasetter
             S.Out(titleR, "MODS", S.Title, S.Yellow, 1.5f);
             GUI.matrix = m;
 
+            float x = WW - FR - 18;
+            float cw = BW("CLOSE", 104); x -= cw;
+            if (S.PlankButton(R(x, FR + 14, cw, 42), "CLOSE", S.White)) Toggle();
+
             int updates = mods.Count(mm => Status(mm).Update);
             int plugins = mods.Count(mm => mm.Kind == ModKind.Loaded);
             string head = plugins + " PLUGINS";
@@ -240,9 +377,6 @@ namespace Apocasetter
             else if (Updates.CheckError != null) head += "  ·  UPDATE CHECK FAILED";
             S.Out(R(FR + 168, FR + 22, 520, 28), head, S.BodyBold, S.White);
 
-            float x = WW - FR - 18;
-            float cw = BW("CLOSE", 104); x -= cw;
-            if (S.PlankButton(R(x, FR + 14, cw, 42), "CLOSE", S.White)) Toggle();
             float uw = BW("CHECK FOR UPDATES", 196); x -= uw + 8;
             if (S.PlankButton(R(x, FR + 14, uw, 42), "CHECK FOR UPDATES", S.White, null, !Updates.Checking)) StartCoroutine(Updates.Check(true));
             string when = Updates.Checking ? "Checking…" : Updates.CheckError != null ? "No connection to GitHub" : Updates.HaveIndex ? "Checked " + Ago(Updates.IndexTimeUtc) : "Not checked yet";
@@ -317,6 +451,12 @@ namespace Apocasetter
             var view = R(RailX, TopY + 96, RailW, BottomY - 8 - (TopY + 96));
             var inner = new Rect(0, 0, view.width - U(14), U(contentH));
             _listScroll = GUI.BeginScrollView(view, _listScroll, inner, false, false, GUIStyle.none, S.ScrollV);
+            try { DrawRailRows(groups, inner, GH, RH); }
+            finally { GUI.EndScrollView(); }
+        }
+
+        private void DrawRailRows(List<Group> groups, Rect inner, float GH, float RH)
+        {
             float y = 0;
             if (groups.Count == 0) S.Out(new Rect(U(4), U(10), inner.width, U(24)), "No mod matches.", S.Small, S.Desc);
             foreach (var g in groups)
@@ -326,11 +466,11 @@ namespace Apocasetter
                 foreach (var m in g.Items)
                 {
                     var r = new Rect(0, y, inner.width, U(RH));
-                    DrawListRow(r, m);
+                    var row = m;
+                    Part("list row " + m.Name, () => DrawListRow(r, row));
                     y += U(RH + 2);
                 }
             }
-            GUI.EndScrollView();
         }
 
         private GUIStyle _leftBtn;
@@ -413,6 +553,16 @@ namespace Apocasetter
         }
 
         private ModStatus Status(ModEntry m)
+        {
+            try { return StatusOf(m); }
+            catch (Exception e)
+            {
+                if (_loggedErrors.Add("status|" + m.Guid)) Plugin.Log.LogError("Mods window: status of " + m.Name + " (" + m.Guid + ", v" + m.Version + "): " + e);
+                return new ModStatus { Sub = m.Version != null ? "v" + m.Version : "" };
+            }
+        }
+
+        private ModStatus StatusOf(ModEntry m)
         {
             var s = new ModStatus();
             var im = m.Index;
@@ -532,15 +682,21 @@ namespace Apocasetter
             // content
             var area = R(x0, y, w0, (BottomY - 8 - 16) - y);
             GUILayout.BeginArea(area);
-            _rightScroll = GUILayout.BeginScrollView(_rightScroll, false, false, GUIStyle.none, S.ScrollV, GUIStyle.none);
-            float cw = area.width - U(16);
-            if (_tab == "about") DrawAbout(m, im, cw);
-            else if (_tab == "notes") DrawNotes(m, im, cw);
-            else if (_tab == "files") DrawFiles(m, cw);
-            else DrawSettings(m, im, cw);
-            GUILayout.Space(U(12));
-            GUILayout.EndScrollView();
-            GUILayout.EndArea();
+            try
+            {
+                _rightScroll = GUILayout.BeginScrollView(_rightScroll, false, false, GUIStyle.none, S.ScrollV, GUIStyle.none);
+                try
+                {
+                    float cw = area.width - U(16);
+                    if (_tab == "about") DrawAbout(m, im, cw);
+                    else if (_tab == "notes") DrawNotes(m, im, cw);
+                    else if (_tab == "files") DrawFiles(m, cw);
+                    else DrawSettings(m, im, cw);
+                    GUILayout.Space(U(12));
+                }
+                finally { GUILayout.EndScrollView(); }
+            }
+            finally { GUILayout.EndArea(); }
         }
 
         /// Returns the height used (virtual units), 0 when there's nothing to say.
