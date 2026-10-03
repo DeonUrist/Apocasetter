@@ -157,6 +157,13 @@ namespace Apocasetter
             Draw(0);
         }
 
+        /// Width (virtual units) a plank needs for its label. The label is measured as drawn, so a translation (ApocaLanguage) widens it too.
+        private float BW(string text, float min, GUIStyle st = null, float pad = 36)
+        {
+            var w = (st ?? S.Btn).CalcSize(new GUIContent(text)).x / _sc + pad;
+            return Mathf.Max(min, Mathf.Ceil(w));
+        }
+
         private Rect R(float x, float y, float w, float h) { return new Rect(_wx + x * _sc, _wy + y * _sc, w * _sc, h * _sc); }
         private float U(float v) { return v * _sc; }
 
@@ -203,12 +210,12 @@ namespace Apocasetter
             S.Out(R(FR + 168, FR + 22, 520, 28), head, S.BodyBold, S.White);
 
             float x = WW - FR - 18;
-            float cw = 104; x -= cw;
+            float cw = BW("CLOSE", 104); x -= cw;
             if (S.PlankButton(R(x, FR + 14, cw, 42), "CLOSE", S.White)) Toggle();
-            float uw = 196; x -= uw + 8;
+            float uw = BW("CHECK FOR UPDATES", 196); x -= uw + 8;
             if (S.PlankButton(R(x, FR + 14, uw, 42), "CHECK FOR UPDATES", S.White, null, !Updates.Checking)) StartCoroutine(Updates.Check(true));
             string when = Updates.Checking ? "Checking…" : Updates.CheckError != null ? "No connection to GitHub" : Updates.HaveIndex ? "Checked " + Ago(Updates.IndexTimeUtc) : "Not checked yet";
-            S.Out(R(x - 230, FR + 22, 220, 28), when, S.Small, Updates.CheckError != null ? S.Red : S.Desc);
+            S.Out(R(x - 230, FR + 22, 222, 28), when, S.Small, Updates.CheckError != null ? S.Red : S.Desc);
             S.Fill(R(FR, TopY - 6, WW - 2 * FR, 2), new Color(0, 0, 0, 0.55f));
         }
 
@@ -239,7 +246,10 @@ namespace Apocasetter
             var chips = new[] { new KeyValuePair<string, string>("all", "ALL " + mods.Count(m => m.Kind != ModKind.Available)),
                                 new KeyValuePair<string, string>("updates", "UPDATES " + nUpd),
                                 new KeyValuePair<string, string>("other", "OTHER " + nOther) };
-            float[] widths = { 80, 108, 84 };
+            var widths = chips.Select(c => BW(c.Value, 60, S.BtnSmall, 26)).ToArray();
+            float total = widths.Sum() + 2 * (chips.Length - 1);
+            if (total < RailW) { float extra = (RailW - total) / chips.Length; for (int i = 0; i < widths.Length; i++) widths[i] += extra; }
+            else { float k = (RailW - 2 * (chips.Length - 1)) / widths.Sum(); for (int i = 0; i < widths.Length; i++) widths[i] *= k; }
             float cx = RailX;
             for (int i = 0; i < chips.Length; i++)
             {
@@ -621,7 +631,8 @@ namespace Apocasetter
                 GUILayout.Space(U(16));
                 WrapLabel("This plugin doesn't list itself in Apocasetter (no \"Apocasetter = true\" in its config). Its settings can still be shown, read straight from its config file.", S.Body, S.Desc, cw);
                 GUILayout.Space(U(8));
-                var br = GUILayoutUtility.GetRect(U(170), U(40), GUILayout.Width(U(170)), GUILayout.Height(U(40)));
+                float saw = U(BW("SHOW ANYWAY", 170));
+                var br = GUILayoutUtility.GetRect(saw, U(40), GUILayout.Width(saw), GUILayout.Height(U(40)));
                 if (S.PlankButton(br, "SHOW ANYWAY", S.White)) _showOther.Add(m.Guid);
                 return;
             }
@@ -661,9 +672,10 @@ namespace Apocasetter
                 if (collapsed)
                 {
                     GUILayout.BeginHorizontal();
-                    var lr = GUILayoutUtility.GetRect(cw - U(150), U(44), GUILayout.Width(cw - U(150)), GUILayout.Height(U(44)));
+                    float sw = U(BW("SHOW ALL", 140));
+                    var lr = GUILayoutUtility.GetRect(cw - sw - U(10), U(44), GUILayout.Width(cw - sw - U(10)), GUILayout.Height(U(44)));
                     S.Label(lr, rows.Count + " entries. Too many to list here; they're in the .cfg file.", S.Small, S.Desc);
-                    var br = GUILayoutUtility.GetRect(U(140), U(40), GUILayout.Width(U(140)), GUILayout.Height(U(40)));
+                    var br = GUILayoutUtility.GetRect(sw, U(40), GUILayout.Width(sw), GUILayout.Height(U(40)));
                     if (S.PlankButton(br, "SHOW ALL", S.White)) _showAll.Add(m.Guid + "|" + kv.Key);
                     GUILayout.EndHorizontal();
                     continue;
@@ -750,8 +762,9 @@ namespace Apocasetter
             if (t == typeof(bool))
             {
                 bool v = (bool)e.BoxedValue;
-                var off = new Rect(right - U(66), ctrl.y, U(66), U(38));
-                var on = new Rect(off.x - U(68), ctrl.y, U(66), U(38));
+                float ow = Mathf.Max(BW("ON", 66), BW("OFF", 66));
+                var off = new Rect(right - U(ow), ctrl.y, U(ow), U(38));
+                var on = new Rect(off.x - U(ow + 2), ctrl.y, U(ow), U(38));
                 if (S.PlankButton(on, "ON", v ? S.Yellow : S.White, null, true, v ? 1f : 0.4f) && !v) SetNow(e, true);
                 if (S.PlankButton(off, "OFF", v ? S.White : S.Yellow, null, true, v ? 0.4f : 1f) && v) SetNow(e, false);
             }
@@ -918,7 +931,8 @@ namespace Apocasetter
             if (!string.IsNullOrEmpty(im.Page))
             {
                 GUILayout.Space(U(10));
-                var br = GUILayoutUtility.GetRect(U(200), U(40), GUILayout.Width(U(200)), GUILayout.Height(U(40)));
+                float rw = U(BW("RELEASE PAGE", 200));
+                var br = GUILayoutUtility.GetRect(rw, U(40), GUILayout.Width(rw), GUILayout.Height(U(40)));
                 if (S.PlankButton(br, "RELEASE PAGE", S.White)) Application.OpenURL(im.Page);
             }
         }
@@ -955,15 +969,16 @@ namespace Apocasetter
             }
             GUILayout.Space(U(14));
             GUILayout.BeginHorizontal();
-            var b1 = GUILayoutUtility.GetRect(U(210), U(40), GUILayout.Width(U(210)), GUILayout.Height(U(40)));
+            float w1 = U(BW("OPEN PLUGIN FOLDER", 210)), w2 = U(BW("OPEN CONFIG FILE", 190)), w3 = U(BW("DISABLE", 120));
+            var b1 = GUILayoutUtility.GetRect(w1, U(40), GUILayout.Width(w1), GUILayout.Height(U(40)));
             if (S.PlankButton(b1, "OPEN PLUGIN FOLDER", S.White)) OpenPath(folder ?? Paths.PluginPath);
             GUILayout.Space(U(6));
-            var b2 = GUILayoutUtility.GetRect(U(190), U(40), GUILayout.Width(U(190)), GUILayout.Height(U(40)));
+            var b2 = GUILayoutUtility.GetRect(w2, U(40), GUILayout.Width(w2), GUILayout.Height(U(40)));
             if (S.PlankButton(b2, "OPEN CONFIG FILE", S.White, null, m.Config != null)) OpenPath(m.Config.ConfigFilePath);
             if (!m.Self)
             {
                 GUILayout.Space(U(6));
-                var b3 = GUILayoutUtility.GetRect(U(120), U(40), GUILayout.Width(U(120)), GUILayout.Height(U(40)));
+                var b3 = GUILayoutUtility.GetRect(w3, U(40), GUILayout.Width(w3), GUILayout.Height(U(40)));
                 if (S.PlankButton(b3, "DISABLE", S.White, null, Updates.InstallerPresent && Updates.OpFor(m.Guid) == null)) StageSimple(m, "disable", null, false);
             }
             GUILayout.FlexibleSpace();
@@ -992,9 +1007,11 @@ namespace Apocasetter
         private void DrawBottom(ModEntry mod)
         {
             float y = BottomY + 4;
+            float right = WW - FR - 16;
             if (Updates.Ops.Count > 0)
             {
-                var bar = R(RailX, y, WW - FR - 16 - RailX - 236, 40);
+                float qw = BW("QUIT GAME TO APPLY", 226);
+                var bar = R(RailX, y, right - RailX - qw - 10, 40);
                 S.Fill(bar, Color.black);
                 S.Fill(new Rect(bar.x + 2, bar.y + 2, bar.width - 4, bar.height - 4), S.Hex("0C0A08"));
                 S.HazardStrip(new Rect(bar.x + 2, bar.y + 2, U(14), bar.height - 4));
@@ -1009,8 +1026,8 @@ namespace Apocasetter
                 S.Label(ur, "Undo all", S.Small, S.White);
                 S.Fill(new Rect(ur.x, ur.center.y + U(8), uw, 1), S.White);
                 if (GUI.Button(ur, GUIContent.none, S.Invisible)) Updates.UnstageAll();
-                if (GameMenu.InGame) S.Out(R(WW - FR - 16 - 226, y, 226, 40), "Save, then restart the game", S.Small, S.Desc);
-                else if (S.PlankButton(R(WW - FR - 16 - 226, y - 1, 226, 42), "QUIT GAME TO APPLY", S.Yellow)) Application.Quit();
+                if (GameMenu.InGame) S.Out(R(right - qw, y, qw, 40), "Save, then restart the game", S.Small, S.Desc);
+                else if (S.PlankButton(R(right - qw, y - 1, qw, 42), "QUIT GAME TO APPLY", S.Yellow)) Application.Quit();
                 return;
             }
             string status = Time.unscaledTime < _statusUntil ? _status : LastResultsText();
@@ -1019,13 +1036,13 @@ namespace Apocasetter
                 status = _pending.Count > 0 ? _pending.Count + " unsaved change(s): press Enter" : "Changes are saved as you make them.";
                 if (!Updates.InstallerPresent) status = "Apocasetter.Installer.dll is missing from BepInEx\\patchers: updates and removals are off.";
             }
-            S.Out(R(RailX, y, 640, 40), status, S.Small, Updates.InstallerPresent ? S.Desc : S.Hex("FF8A78"));
-            float x = WW - FR - 16;
-            x -= 214;
-            if (S.PlankButton(R(x, y - 1, 214, 42), "OPEN CONFIG FOLDER", S.White)) OpenPath(Paths.ConfigPath);
-            x -= 196;
-            if (S.PlankButton(R(x, y - 1, 190, 42), "RELOAD FROM FILE", S.White, null, mod != null && mod.Config != null))
+            float fw = BW("OPEN CONFIG FOLDER", 214), lw = BW("RELOAD FROM FILE", 190);
+            float x = right - fw;
+            if (S.PlankButton(R(x, y - 1, fw, 42), "OPEN CONFIG FOLDER", S.White)) OpenPath(Paths.ConfigPath);
+            x -= lw + 6;
+            if (S.PlankButton(R(x, y - 1, lw, 42), "RELOAD FROM FILE", S.White, null, mod != null && mod.Config != null))
             { _pending.Clear(); _errors.Clear(); mod.Config.Reload(); SetStatus("Reloaded " + Path.GetFileName(mod.Config.ConfigFilePath)); }
+            S.Out(R(RailX, y, x - RailX - 12, 40), status, S.Small, Updates.InstallerPresent ? S.Desc : S.Hex("FF8A78"));
         }
 
         private string LastResultsText()
@@ -1046,7 +1063,8 @@ namespace Apocasetter
             var plugin = m.PluginPaths();
             var cfgs = m.ConfigPaths();
             var deps = m.Dependents();
-            float w = 620;
+            float rw = BW("REMOVE", 130), dw = BW("DISABLE INSTEAD", 190), cw2 = BW("CANCEL", 120);
+            float w = Mathf.Max(620, rw + dw + cw2 + 12 + 60);
             string intro = m.Name + " " + m.Version + " keeps running until you quit. On the next start its files are moved to BepInEx\\cache\\Apocasetter\\removed\\, so you can put them back.";
             float introH = S.Body.CalcHeight(new GUIContent(intro), U(w - 76)) / _sc;
             float h = 70 + introH + 18 + plugin.Count * 24 + 24 + 54 + (deps.Count > 0 ? 50 : 0) + 70;
@@ -1086,9 +1104,9 @@ namespace Apocasetter
                 cy += 50;
             }
             float bx = x + w - 30;
-            bx -= 130; bool doRemove = S.PlankButton(R(bx, cy + 8, 130, 44), "REMOVE", S.Red);
-            bx -= 196; bool doDisable = S.PlankButton(R(bx, cy + 8, 190, 44), "DISABLE INSTEAD", S.White);
-            bx -= 126; bool cancel = S.PlankButton(R(bx, cy + 8, 120, 44), "CANCEL", S.White);
+            bx -= rw; bool doRemove = S.PlankButton(R(bx, cy + 8, rw, 44), "REMOVE", S.Red);
+            bx -= dw + 6; bool doDisable = S.PlankButton(R(bx, cy + 8, dw, 44), "DISABLE INSTEAD", S.White);
+            bx -= cw2 + 6; bool cancel = S.PlankButton(R(bx, cy + 8, cw2, 44), "CANCEL", S.White);
             if (cancel) _removeOpen = false;
             if (doDisable) { StageSimple(m, "disable", null, false); _removeOpen = false; }
             if (doRemove) { StageSimple(m, "remove", null, _removeCfg); _removeOpen = false; }
@@ -1157,7 +1175,7 @@ namespace Apocasetter
             // once per game start, on the title screen only
             if (_toastDismissed || GameMenu.InGame || (updates.Count == 0 && Updates.LastResults.Count == 0)) return;
             var anchor = rects[0];
-            float w = U(340);
+            float w = U(Mathf.Max(340, 2 * Mathf.Max(BW("LATER", 150), BW("OPEN MODS", 150)) + 32));
             var lines = new List<KeyValuePair<string, string>>();
             foreach (var r in Updates.LastResults)
             {
