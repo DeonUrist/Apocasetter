@@ -37,7 +37,7 @@ namespace Apocasetter
         private readonly Dictionary<ConfigEntryBase, string> _pending = new Dictionary<ConfigEntryBase, string>();
         private readonly Dictionary<ConfigEntryBase, string> _errors = new Dictionary<ConfigEntryBase, string>();
         private ConfigEntryBase _dropdown, _rebind, _sliderDrag;
-        private readonly HashSet<string> _expanded = new HashSet<string>(), _showAll = new HashSet<string>(), _showOther = new HashSet<string>();
+        private readonly HashSet<string> _showAll = new HashSet<string>(), _showOther = new HashSet<string>();
         private bool _removeOpen, _removeCfg;
         private string _status = "";
         private float _statusUntil;
@@ -699,41 +699,18 @@ namespace Apocasetter
             float titleW = Mathf.Min(S.BodyBold.CalcSize(new GUIContent(title)).x, leftW - (tx - tr.x));
             S.Label(new Rect(tx, tr.y, titleW, tr.height), title, S.BodyBold, S.White);
             S.Label(new Rect(tx + titleW + U(10), tr.y + U(2), leftW - titleW - U(10), tr.height), e.Definition.Key, S.Mono, S.Dim);
-            // description (2 lines unless expanded)
+            // description: always the full text
             if (desc.Length > 0)
             {
                 GUILayout.Space(U(4));
-                float full = S.Body.CalcHeight(new GUIContent(desc), leftW);
-                float two = S.Body.CalcHeight(new GUIContent("A\nA"), leftW);
-                var key = m.Guid + "|" + e.Definition.Section + "|" + e.Definition.Key;
-                bool longText = full > two + 2;
-                bool open = _expanded.Contains(key);
-                float h = longText && !open ? two : full;
-                var dr = GUILayoutUtility.GetRect(leftW, h, GUILayout.Width(leftW), GUILayout.Height(h));
-                GUI.BeginGroup(dr);
-                S.Label(new Rect(0, 0, leftW, full), desc, S.Body, S.Desc);
-                GUI.EndGroup();
+                float full = S.Body.CalcHeight(new GUIContent(desc), leftW) + U(2);
+                var dr = GUILayoutUtility.GetRect(leftW, full, GUILayout.Width(leftW), GUILayout.Height(full));
+                S.Label(dr, desc, S.Body, S.Desc);
                 GUILayout.Space(U(10));
-                var cr = GUILayoutUtility.GetRect(leftW, U(20), GUILayout.Width(leftW), GUILayout.Height(U(20)));
-                float cx = cr.x;
-                if (longText)
-                {
-                    string more = open ? "Show less" : "Show more";
-                    float mw = S.Small.CalcSize(new GUIContent(more)).x;
-                    var mr = new Rect(cx, cr.y, mw, cr.height);
-                    S.Label(mr, more, S.Small, S.Yellow);
-                    S.Fill(new Rect(mr.x, mr.yMax - U(3), mw, 1), S.Yellow);
-                    if (GUI.Button(mr, GUIContent.none, S.Invisible)) { if (open) _expanded.Remove(key); else _expanded.Add(key); }
-                    cx += mw + U(10);
-                }
-                cx = Chips(cx, cr, e, ranged, modified, desc);
             }
-            else
-            {
-                GUILayout.Space(U(4));
-                var cr = GUILayoutUtility.GetRect(leftW, U(20), GUILayout.Width(leftW), GUILayout.Height(U(20)));
-                Chips(cr.x, cr, e, ranged, modified, desc);
-            }
+            else GUILayout.Space(U(4));
+            var cr = GUILayoutUtility.GetRect(leftW, U(20), GUILayout.Width(leftW), GUILayout.Height(U(20)));
+            Chips(cr.x, cr, e, ranged, modified, desc);
             // key conflicts / errors
             if (isKey)
             {
