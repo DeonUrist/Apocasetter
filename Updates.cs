@@ -20,7 +20,7 @@ namespace Apocasetter
     {
         public string Guid, Name, Author, Repo, Summary, Trust, PluginFolder, BlockedReason, Error, DeprecatedReason;
         public bool Blocked, Deprecated;
-        public List<string> ReplacedBy = new List<string>();
+        public List<string> ReplacedBy = new List<string>(), Replaces = new List<string>();
         public List<string> Tags = new List<string>(), Requires = new List<string>(), Optional = new List<string>();
         public string Version, Tag, Published, Page, Notes;
         public IndexZip Zip;
@@ -158,7 +158,7 @@ namespace Apocasetter
                     BlockedReason = MiniJson.Str(d, "blockedReason"), Error = MiniJson.Str(d, "error", null),
                     Tags = MiniJson.StrList(d, "tags"), Requires = MiniJson.StrList(d, "requires"), Optional = MiniJson.StrList(d, "optional"),
                     Deprecated = MiniJson.Bool(d, "deprecated", false), DeprecatedReason = MiniJson.Str(d, "deprecatedReason"),
-                    ReplacedBy = MiniJson.StrList(d, "replacedBy"),
+                    ReplacedBy = MiniJson.StrList(d, "replacedBy"), Replaces = MiniJson.StrList(d, "replaces"),
                 };
                 var latest = MiniJson.Obj(d.ContainsKey("latest") ? d["latest"] : null);
                 if (latest != null)

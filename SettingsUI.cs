@@ -568,7 +568,7 @@ namespace Apocasetter
             var im = m.Index;
             var op = Updates.OpFor(m.Guid);
             float prog;
-            s.Sub = m.Version != null ? "v" + m.Version : (im != null ? "v" + im.Version + " on GitHub" : "");
+            s.Sub = m.Version != null ? "v" + m.Version : (im != null ? (string.IsNullOrEmpty(im.Version) ? "no release yet" : "v" + im.Version + " on GitHub") : "");
             if (m.Kind == ModKind.Disabled) s.Sub = "v" + m.Version + " · disabled";
             if (im != null && m.Kind == ModKind.Loaded)
             {
@@ -657,6 +657,10 @@ namespace Apocasetter
             {
                 float dh = DrawDeprecated(x0, y, w0, m, im);
                 if (dh > 0) y += dh + 8;
+            }
+            {
+                float th = DrawTakeover(x0, y, w0, m, im);
+                if (th > 0) y += th + 8;
             }
 
             // tabs
@@ -791,6 +795,68 @@ namespace Apocasetter
             return 62;
         }
 
+        /// Installed mods (not already being removed/disabled) whose features this index mod takes over ("replaces").
+        private static List<ModEntry> TakesOverInstalled(IndexMod im)
+        {
+            if (im == null) return new List<ModEntry>();
+            return im.Replaces.Select(g => Catalog.Find(g)).Where(x => x != null && x.Kind == ModKind.Loaded && Updates.OpFor(x.Guid) == null).ToList();
+        }
+
+        /// Installed mods (not being removed/disabled) that take over this mod's features.
+        private static List<ModEntry> InstalledTakingOver(ModEntry m)
+        {
+            return Catalog.All().Where(x => x.Kind == ModKind.Loaded && x.Guid != m.Guid && x.Index != null && x.Index.Replaces.Contains(m.Guid)
+                                            && Updates.OpFor(x.Guid) == null).ToList();
+        }
+
+        /// Old and new versions of the same features installed together, or about to be: say so, offer to disable the old one.
+        private float DrawTakeover(float x0, float y, float w0, ModEntry m, IndexMod im)
+        {
+            ModEntry old = null; string title = null, sub = null;
+            if (m.Kind == ModKind.Loaded && Updates.OpFor(m.Guid) == null)
+            {
+                var newer = InstalledTakingOver(m);
+                if (newer.Count > 0)
+                {
+                    old = m;
+                    title = "RUNS TWICE WITH " + string.Join(", ", newer.Select(x => x.Name).ToArray()).ToUpperInvariant();
+                    sub = string.Join(", ", newer.Select(x => x.Name).ToArray()) + (newer.Count == 1 ? " takes" : " take") + " over " + m.Name + "'s features; with both installed they apply twice.";
+                }
+                else
+                {
+                    var olds = TakesOverInstalled(im);
+                    if (olds.Count > 0)
+                    {
+                        old = olds[0];
+                        title = "RUNS TWICE WITH " + old.Name.ToUpperInvariant();
+                        sub = m.Name + " takes over " + old.Name + "'s features; with both installed they apply twice.";
+                    }
+                }
+            }
+            else if (m.Kind == ModKind.Available && Updates.OpFor(m.Guid) == null)
+            {
+                var olds = TakesOverInstalled(im);
+                if (olds.Count == 0) return 0;
+                var r0 = R(x0, y, w0, 34);
+                S.Fill(r0, S.Hex("17130D"));
+                S.Label(new Rect(r0.x + U(14), r0.y, r0.width - U(28), r0.height), "Installing it also disables " + string.Join(", ", olds.Select(x => x.Name).ToArray())
+                    + " at the next start: " + m.Name + " takes over " + (olds.Count == 1 ? "its" : "their") + " features.", S.Small, S.Desc);
+                return 34;
+            }
+            if (old == null) return 0;
+            var r = R(x0, y, w0, 62);
+            S.Fill(r, Color.black);
+            S.Fill(new Rect(r.x + 2, r.y + 2, r.width - 4, r.height - 4), S.Hex("1E0907"));
+            string btn = "DISABLE " + old.Name.ToUpperInvariant();
+            float bw = U(BW(btn, 120));
+            float tx = r.x + U(14), tw = r.width - bw - U(40);
+            S.Out(new Rect(tx, r.y + U(7), tw, U(26)), title, S.Section, S.Hex("FF8A78"));
+            S.Label(new Rect(tx, r.y + U(33), tw, U(24)), sub, S.Small, S.Desc);
+            var target = old;
+            if (S.PlankButton(new Rect(r.xMax - bw - U(10), r.y + U(10), bw, U(42)), btn, S.Yellow, null, Updates.InstallerPresent)) StageSimple(target, "disable", null, false);
+            return 62;
+        }
+
         /// Deprecated in the index: the maintainer's reason and up to 4 mods that take over (click one to open its page).
         private float DrawDeprecated(float x0, float y, float w0, ModEntry m, IndexMod im)
         {
@@ -801,6 +867,16 @@ namespace Apocasetter
             S.Fill(new Rect(r.x + 2, r.y + 2, r.width - 4, r.height - 4), S.Hex("1C1610"));
             S.Fill(new Rect(r.x + 2, r.y + 2, U(6), r.height - 4), S.Hex("E8A33C"));
             float tx = r.x + U(22), tw = r.width - U(36);
+            var installable = repl.Select(g => Catalog.Find(g)).Where(x => x != null && x.Kind == ModKind.Available && Updates.OpFor(x.Guid) == null
+                                                                         && !Updates.Downloading.ContainsKey(x.Guid) && x.Index != null && x.Index.Zip != null).ToList();
+            if (installable.Count > 1)
+            {
+                string all = "INSTALL ALL " + installable.Count;
+                float aw = U(BW(all, 120, S.BtnSmall, 26));
+                if (S.PlankButton(new Rect(r.xMax - aw - U(10), r.y + U(8), aw, U(34)), all, S.Yellow, S.BtnSmall, Updates.InstallerPresent))
+                    foreach (var x in installable) Install(x);
+                tw -= aw / 1f + U(10);
+            }
             S.Out(new Rect(tx, r.y + U(7), tw, U(26)), "DEPRECATED", S.Section, S.Hex("E8A33C"));
             S.Label(new Rect(tx, r.y + U(33), tw, U(24)),
                 string.IsNullOrEmpty(im.DeprecatedReason) ? "This mod is no longer developed. It keeps working as it is, but gets no fixes." : im.DeprecatedReason, S.Small, S.Desc);
@@ -1404,6 +1480,12 @@ namespace Apocasetter
             var im = m.Index;
             if (im == null) return;
             Download(m, im);
+            // a mod that takes over another one's features must not run beside it: disable the old one at the same restart
+            foreach (var old in TakesOverInstalled(im))
+            {
+                StageSimple(old, "disable", null, false);
+                SetStatus(old.Name + " will be disabled at the next start: " + m.Name + " takes over its features.");
+            }
             foreach (var req in im.Requires)
             {
                 if (Catalog.All().Any(x => x.Guid == req && x.Kind == ModKind.Loaded) || Updates.OpFor(req) != null) continue;
