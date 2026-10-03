@@ -27,12 +27,13 @@ namespace Apocasetter
     {
         public const string GUID = "com.denis.apocalypter.apocasetter";
         public const string NAME = "Apocasetter";
-        public const string VERSION = "1.0.2";
+        public const string VERSION = "2.0.0";
 
         public static ManualLogSource Log;
         public static string PluginPath;
         public static ConfigEntry<Key> MenuKeyEntry;
         public static ConfigEntry<bool> RestoreCursorEntry;
+        public static ConfigEntry<bool> CheckUpdatesEntry, UpdateNoticeEntry;
         private static GameObject _runner;
 
         private void Awake()
@@ -43,9 +44,16 @@ namespace Apocasetter
             RestoreCursorEntry = Config.Bind("General", "RestoreCursorAfterAltTab", true,
                 "Re-lock and hide the mouse cursor when the game window regains focus (Alt+Tab) if it was locked before. Unity drops the lock on focus loss and the game only sets it on menu transitions, so the cursor otherwise stays on screen.");
 
+            CheckUpdatesEntry = Config.Bind("Updates", "CheckForUpdates", true,
+                "Once per game start (results kept for 6 hours), download the Apocasetter index from GitHub and compare it with your installed mods. Nothing about you or your PC is sent.");
+            UpdateNoticeEntry = Config.Bind("Updates", "UpdateNotice", true,
+                "Show a badge on the MODS button and a short message on the title screen when an update is found.");
+
             SceneManager.sceneLoaded += (s, m) => EnsureRunner("scene " + s.name);
             InputBlocker.Install();
             Theme.Load(Info.Location);
+            GameSkin.Init(Info.Location);
+            Updates.Init();
             EnsureRunner("Awake");
             Log.LogInfo(NAME + " " + VERSION + " loaded.");
         }
@@ -276,7 +284,21 @@ namespace Apocasetter
                     if (!isText && !isGraphic) UnityEngine.Object.DestroyImmediate(c.gameObject);
                     else c.gameObject.SetActive(true);
                 }
-                foreach (var tx in go.GetComponentsInChildren<Text>(true)) tx.text = Caps(tx.text) ? "MODS" : "Mods";
+                foreach (var tx in go.GetComponentsInChildren<Text>(true))
+                {
+                    tx.text = Caps(tx.text) ? "MODS" : "Mods";
+                    if (tx.font != null) GameSkin.SetGameFont(tx.font);
+                }
+                foreach (var tx in go.GetComponentsInChildren<TMPro.TMP_Text>(true))
+                    if (tx.font != null && tx.font.sourceFontFile != null) GameSkin.SetGameFont(tx.font.sourceFontFile);
+                try
+                {
+                    var img = template.GetComponent<Image>();
+                    Plugin.Log.LogInfo("MODS button template: sprite '" + (img != null && img.sprite != null ? img.sprite.name : "-") + "', font '"
+                        + string.Join(",", go.GetComponentsInChildren<Text>(true).Select(t => t.font != null ? t.font.name : "-").ToArray()) + "' / TMP '"
+                        + string.Join(",", go.GetComponentsInChildren<TMPro.TMP_Text>(true).Select(t => t.font != null ? t.font.name : "-").ToArray()) + "'");
+                }
+                catch { }
                 foreach (var tx in go.GetComponentsInChildren<TMPro.TMP_Text>(true)) tx.text = Caps(tx.text) ? "MODS" : "Mods";
 
                 var btn = go.GetComponentInChildren<Button>(true);
@@ -308,6 +330,22 @@ namespace Apocasetter
                 if (slot.Button != null) UnityEngine.Object.Destroy(slot.Button);
                 slot.Button = null;
             }
+        }
+
+        /// IMGUI rects (top-left origin) of every MODS button currently on screen.
+        public static List<Rect> VisibleButtonRects()
+        {
+            var list = new List<Rect>();
+            foreach (var slot in _slots)
+            {
+                if (slot.Button == null || !slot.Button.activeInHierarchy) continue;
+                var c = slot.Canvas;
+                if (c == null || !c.enabled || !c.isActiveAndEnabled) continue;
+                var r = ScreenRect(slot.Button.GetComponent<RectTransform>(), c);
+                if (r.width < 2 || r.height < 2 || r.xMax <= 0 || r.yMax <= 0 || r.xMin >= Screen.width || r.yMin >= Screen.height) continue;
+                list.Add(new Rect(r.x, Screen.height - r.yMax, r.width, r.height));
+            }
+            return list;
         }
 
         /// True when a native MODS button is currently drawn somewhere inside the screen.

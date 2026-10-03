@@ -13,6 +13,10 @@
     <BepInExCore>$(GameDir)\BepInEx\core</BepInExCore>
   </PropertyGroup>
   <ItemGroup>
+    <!-- the start-up installer is its own DLL (Installer\Apocasetter.Installer.csproj) -->
+    <Compile Remove="Installer\**" />
+  </ItemGroup>
+  <ItemGroup>
     <Reference Include="BepInEx"><HintPath>$(BepInExCore)\BepInEx.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="0Harmony"><HintPath>$(BepInExCore)\0Harmony.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine"><HintPath>$(ManagedDir)\UnityEngine.dll</HintPath><Private>false</Private></Reference>
@@ -27,12 +31,13 @@
     <Reference Include="UnityEngine.UI"><HintPath>$(ManagedDir)\UnityEngine.UI.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="UnityEngine.UIModule"><HintPath>$(ManagedDir)\UnityEngine.UIModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="Unity.TextMeshPro"><HintPath>$(ManagedDir)\Unity.TextMeshPro.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.UnityWebRequestModule"><HintPath>$(ManagedDir)\UnityEngine.UnityWebRequestModule.dll</HintPath><Private>false</Private></Reference>
     <Reference Include="PlayMaker"><HintPath>$(ManagedDir)\PlayMaker.dll</HintPath><Private>false</Private></Reference>
   </ItemGroup>
   <Target Name="DeployToGame" AfterTargets="Build">
     <Copy SourceFiles="$(OutDir)$(AssemblyName).dll" DestinationFolder="$(GameDir)\BepInEx\plugins\Apocasetter" />
     <ItemGroup><ThemeFiles Include="theme\**\*" /></ItemGroup>
-    <Copy SourceFiles="@(ThemeFiles)" DestinationFolder="$(GameDir)\BepInEx\plugins\Apocasetter\theme" />
+    <Copy SourceFiles="@(ThemeFiles)" DestinationFiles="@(ThemeFiles->'$(GameDir)\BepInEx\plugins\Apocasetter\theme\%(RecursiveDir)%(Filename)%(Extension)')" />
     <Message Importance="high" Text="Deployed $(AssemblyName).dll to $(GameDir)\BepInEx\plugins\Apocasetter" />
   </Target>
 </Project>

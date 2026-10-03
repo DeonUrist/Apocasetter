@@ -31,6 +31,90 @@ namespace Apocasetter
             return r;
         }
 
+        public static bool Bool(Dictionary<string, object> d, string key, bool def)
+            => d != null && d.TryGetValue(key, out var v) && v is bool b ? b : def;
+        public static double Num(Dictionary<string, object> d, string key, double def)
+            => d != null && d.TryGetValue(key, out var v) && v is double n ? n : def;
+        public static List<object> Arr(Dictionary<string, object> d, string key)
+            => d != null && d.TryGetValue(key, out var v) ? v as List<object> : null;
+        public static List<string> StrList(Dictionary<string, object> d, string key)
+        {
+            var r = new List<string>();
+            var l = Arr(d, key);
+            if (l != null) foreach (var o in l) if (o is string s) r.Add(s);
+            return r;
+        }
+
+        /// Serialises Dictionary<string,object> / IList / string / bool / numbers / null (pretty, 2-space indent).
+        public static string Write(object o)
+        {
+            var sb = new StringBuilder();
+            WriteValue(sb, o, 0);
+            return sb.ToString();
+        }
+
+        private static void WriteValue(StringBuilder sb, object o, int depth)
+        {
+            if (o == null) { sb.Append("null"); return; }
+            if (o is string str) { WriteString(sb, str); return; }
+            if (o is bool b) { sb.Append(b ? "true" : "false"); return; }
+            if (o is IDictionary<string, object> d)
+            {
+                if (d.Count == 0) { sb.Append("{}"); return; }
+                sb.Append("{\n");
+                int n = 0;
+                foreach (var kv in d)
+                {
+                    sb.Append(' ', (depth + 1) * 2);
+                    WriteString(sb, kv.Key); sb.Append(": ");
+                    WriteValue(sb, kv.Value, depth + 1);
+                    if (++n < d.Count) sb.Append(',');
+                    sb.Append('\n');
+                }
+                sb.Append(' ', depth * 2).Append('}');
+                return;
+            }
+            if (o is System.Collections.IEnumerable e)
+            {
+                var items = new List<object>();
+                foreach (var x in e) items.Add(x);
+                if (items.Count == 0) { sb.Append("[]"); return; }
+                sb.Append("[\n");
+                for (int i = 0; i < items.Count; i++)
+                {
+                    sb.Append(' ', (depth + 1) * 2);
+                    WriteValue(sb, items[i], depth + 1);
+                    if (i < items.Count - 1) sb.Append(',');
+                    sb.Append('\n');
+                }
+                sb.Append(' ', depth * 2).Append(']');
+                return;
+            }
+            if (o is IFormattable f) { sb.Append(f.ToString(null, CultureInfo.InvariantCulture)); return; }
+            WriteString(sb, o.ToString());
+        }
+
+        private static void WriteString(StringBuilder sb, string s)
+        {
+            sb.Append('"');
+            foreach (var c in s)
+            {
+                switch (c)
+                {
+                    case '"': sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (c < 0x20) sb.Append("\\u").Append(((int)c).ToString("x4"));
+                        else sb.Append(c);
+                        break;
+                }
+            }
+            sb.Append('"');
+        }
+
         private static void SkipWs(string s, ref int i) { while (i < s.Length && char.IsWhiteSpace(s[i])) i++; }
 
         private static object ParseValue(string s, ref int i)
