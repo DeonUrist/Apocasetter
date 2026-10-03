@@ -50,23 +50,34 @@ Config: `BepInEx\config\com.denis.apocalypter.apocasetter.cfg`
 - `[Updates] CheckForUpdates` (default `true`) downloads the index once per game start. Nothing about you or your PC is sent.
 - `[Updates] UpdateNotice` (default `true`) badge on the MODS button and the title-screen notice.
 
-## Making your mod appear in the menu
+## For mod makers: get your mod into the Mods window
 
-Bind a `bool` config entry named `Apocasetter` and set it to `true`:
+**1. Show your settings.** Bind a `bool` entry named `Apocasetter` set to `true` (or put the line `Apocasetter = true` in your `.cfg`):
 
 ```csharp
 Config.Bind("General", "Apocasetter", true, "Show this mod in the Apocasetter Mods menu");
 ```
 
-(A bare `Apocasetter = true` line in the plugin's `.cfg` also works.)
+Every other entry of your config is then listed with its description, default and range. Write a clear description for each one:
+players read it in full. Plugins without the line still show up under **Other plugins**, but only with their files.
 
-Plugins that don't opt in are still listed under **Other plugins** (files, remove / disable, and their settings on request).
+**2. Add an icon.** A square PNG (64×64 is plenty; light lines on a transparent background look best, it is tinted yellow when selected):
 
-**Icon**: put a square `icon.png` (64×64, white on transparent works best) in your plugin's folder, or `<YourDll>.png` beside a DLL that
-sits directly in `plugins`.
+- mod in its own folder → `BepInEx\plugins\YourMod\icon.png`
+- single DLL directly in `plugins` → `YourMod.png` next to `YourMod.dll`
 
-**Updates**: get your mod into the [Apocasetter index](https://github.com/DeonUrist/Apocasetter-Index) (issue form or pull request).
-Your releases need a `.zip` with the plugin DLL attached.
+Put it in your release zip so it is installed with the mod. Without an icon the list shows your mod's initials.
+
+**3. Get update notices and one-click install.**
+
+1. Keep the mod in a **public GitHub repository**.
+2. For every release: tag it with the version (`v1.2.0`), use the **same version in `[BepInPlugin]`**, and **attach a `.zip`** that unpacks into
+   `BepInEx\plugins` (`YourMod.dll`, or a `YourMod\` folder with the DLL and its files; a README at the zip root is fine).
+3. Submit the mod once with the **[Submit a mod form](https://github.com/DeonUrist/Apocasetter-Index/issues/new?template=submit-mod.yml)**.
+   An automatic check comments within a minute or two; after review it is listed in the
+   [Apocasetter index](https://github.com/DeonUrist/Apocasetter-Index).
+
+From then on, each new release reaches players within the hour: they see an update badge and can install it from the Mods window.
 
 ## Using the shared GUI from another mod
 

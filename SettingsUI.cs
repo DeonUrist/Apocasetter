@@ -493,7 +493,6 @@ namespace Apocasetter
                 if (S.PlankButton(R(bx, TopY + 12, bw, 36), b.Key, col, null, !needsInstaller || Updates.InstallerPresent)) b.Value();
                 bx -= 6;
             }
-            if (m.Self) S.Label(R(bx - 150, TopY + 12, 146, 36), "can't remove itself", S.Small, S.Dim);
 
             // banner
             float y = TopY + 112;
