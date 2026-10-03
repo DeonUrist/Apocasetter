@@ -358,7 +358,7 @@ namespace Apocasetter
             if (sel) GUI.Box(r, GUIContent.none, S.PlankStyle);
             if (GUI.Button(r, GUIContent.none, S.Invisible))
             {
-                if (_selected != m.Guid) { ApplyPending(); _selected = m.Guid; _rightScroll = Vector2.zero; _dropdown = null; _settingSearch = ""; if (m.Kind != ModKind.Loaded && _tab == "settings") _tab = "settings"; }
+                if (_selected != m.Guid) { ApplyPending(); _selected = m.Guid; _rightScroll = Vector2.zero; _dropdown = null; _settingSearch = ""; if (m.Kind != ModKind.Loaded && _tab == "settings") _tab = "about"; }
             }
             float ix = r.x + U(sel ? 12 : 10);
             var icon = new Rect(ix, r.y + (r.height - U(36)) / 2, U(36), U(36));
@@ -501,8 +501,12 @@ namespace Apocasetter
 
             // tabs
             int count = m.Entries.Count;
-            var tabs = new[] { new KeyValuePair<string, string>("settings", m.Kind == ModKind.Loaded ? "SETTINGS " + count : "ABOUT"),
-                               new KeyValuePair<string, string>("notes", "WHAT'S NEW"), new KeyValuePair<string, string>("files", "FILES") };
+            if (m.Kind != ModKind.Loaded && _tab == "settings") _tab = "about";
+            var tabs = new List<KeyValuePair<string, string>>();
+            if (m.Kind == ModKind.Loaded) tabs.Add(new KeyValuePair<string, string>("settings", "SETTINGS " + count));
+            tabs.Add(new KeyValuePair<string, string>("about", "ABOUT"));
+            tabs.Add(new KeyValuePair<string, string>("notes", "WHAT'S NEW"));
+            tabs.Add(new KeyValuePair<string, string>("files", "FILES"));
             float tx = x0;
             foreach (var t in tabs)
             {
@@ -530,7 +534,8 @@ namespace Apocasetter
             GUILayout.BeginArea(area);
             _rightScroll = GUILayout.BeginScrollView(_rightScroll, false, false, GUIStyle.none, S.ScrollV, GUIStyle.none);
             float cw = area.width - U(16);
-            if (_tab == "notes") DrawNotes(m, im, cw);
+            if (_tab == "about") DrawAbout(m, im, cw);
+            else if (_tab == "notes") DrawNotes(m, im, cw);
             else if (_tab == "files") DrawFiles(m, cw);
             else DrawSettings(m, im, cw);
             GUILayout.Space(U(12));
@@ -640,22 +645,7 @@ namespace Apocasetter
         // ---------------------------------------------------------------- settings tab
         private void DrawSettings(ModEntry m, IndexMod im, float cw)
         {
-            if (m.Kind != ModKind.Loaded)
-            {
-                GUILayout.Space(U(16));
-                if (im != null)
-                {
-                    WrapLabel(im.Summary, S.Body, S.Desc, cw);
-                    GUILayout.Space(U(10));
-                    if (im.Requires.Count > 0) WrapLabel("Needs: " + string.Join(", ", im.Requires.Select(GuidName).ToArray()) + " (installed together)", S.Small, S.Sub, cw);
-                    if (im.Optional.Count > 0) WrapLabel("Works with: " + string.Join(", ", im.Optional.Select(GuidName).ToArray()), S.Small, S.Sub, cw);
-                    if (im.Tags.Count > 0) WrapLabel("Tags: " + string.Join(", ", im.Tags.ToArray()), S.Small, S.Sub, cw);
-                    GUILayout.Space(U(10));
-                }
-                WrapLabel(m.Kind == ModKind.Available ? "Not installed. Its settings appear here after it is installed and the game has started once."
-                                                      : "Disabled. Its settings appear again once it is enabled.", S.Body, S.Desc, cw);
-                return;
-            }
+            if (m.Kind != ModKind.Loaded) { DrawAbout(m, im, cw); return; }
             if (m.Other && !_showOther.Contains(m.Guid))
             {
                 GUILayout.Space(U(16));
@@ -930,6 +920,49 @@ namespace Apocasetter
             if (m != null) return m.Name;
             var im = Updates.Find(guid);
             return im != null ? im.Name : guid;
+        }
+
+        // ---------------------------------------------------------------- about
+        private void DrawAbout(ModEntry m, IndexMod im, float cw)
+        {
+            GUILayout.Space(U(16));
+            if (im != null && !string.IsNullOrEmpty(im.Summary)) WrapLabel(im.Summary, S.Body, S.Desc, cw);
+            else WrapLabel("This mod isn't in the Apocasetter index, so there's no summary to show.", S.Body, S.Desc, cw);
+            GUILayout.Space(U(14));
+
+            if (im != null && !string.IsNullOrEmpty(im.Author)) AboutRow("Author", im.Author, cw);
+            if (m.Kind != ModKind.Available) AboutRow("Installed", string.IsNullOrEmpty(m.Version) ? "?" : m.Version, cw);
+            if (im != null && !string.IsNullOrEmpty(im.Version))
+                AboutRow("Latest", im.Version + (string.IsNullOrEmpty(im.Published) ? "" : " · released " + When(im.Published)), cw);
+            if (im != null && !string.IsNullOrEmpty(im.Repo)) AboutRow("GitHub", im.Repo, cw);
+            if (im != null && im.Requires.Count > 0)
+                AboutRow("Needs", string.Join(", ", im.Requires.Select(GuidName).ToArray()) + (m.Kind == ModKind.Available ? " (installed together)" : ""), cw);
+            if (im != null && im.Optional.Count > 0) AboutRow("Works with", string.Join(", ", im.Optional.Select(GuidName).ToArray()), cw);
+            if (m.Kind == ModKind.Loaded)
+            {
+                var deps = m.Dependents();
+                if (deps.Count > 0) AboutRow("Used by", string.Join(", ", deps.Select(d => d.Key + (d.Value ? "" : " (optional)")).ToArray()), cw);
+            }
+            if (im != null && im.Tags.Count > 0) AboutRow("Tags", string.Join(", ", im.Tags.ToArray()), cw);
+            AboutRow("Plugin ID", m.Guid, cw);
+
+            if (m.Kind != ModKind.Loaded)
+            {
+                GUILayout.Space(U(14));
+                WrapLabel(m.Kind == ModKind.Available ? "Not installed. Its settings appear here after it is installed and the game has started once."
+                                                      : "Disabled. Its settings appear again once it is enabled.", S.Body, S.Desc, cw);
+            }
+        }
+
+        private void AboutRow(string label, string value, float cw)
+        {
+            float lw = Mathf.Max(U(130), S.Small.CalcSize(new GUIContent(label)).x + U(16));
+            float vw = cw - lw;
+            float h = Mathf.Max(S.Body.CalcHeight(new GUIContent(value), vw), U(26)) + U(6);
+            var r = GUILayoutUtility.GetRect(cw, h, GUILayout.Width(cw), GUILayout.Height(h));
+            S.Label(new Rect(r.x, r.y + U(2), lw, U(24)), label, S.Small, S.Sub);
+            S.Label(new Rect(r.x + lw, r.y, vw, h - U(6)), value, S.Body, S.Desc);
+            S.Fill(new Rect(r.x, r.yMax - U(2), cw, 1), S.Line);
         }
 
         // ---------------------------------------------------------------- what's new
