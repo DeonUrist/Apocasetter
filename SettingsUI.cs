@@ -10,6 +10,7 @@ using BepInEx.Configuration;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.Controls;
+using UnityEngine.EventSystems;
 using S = Apocasetter.GameSkin;
 
 namespace Apocasetter
@@ -53,6 +54,8 @@ namespace Apocasetter
 
         private void Awake() { Instance = this; }
 
+        private void OnDestroy() { UnmuteGameUi(); if (_open) InputBlocker.Set(false); }
+
         private void Start()
         {
             if (Plugin.CheckUpdatesEntry == null || Plugin.CheckUpdatesEntry.Value) StartCoroutine(Updates.Check(false));
@@ -74,9 +77,35 @@ namespace Apocasetter
             if (!_open) GameMenu.Tick(Open);
         }
 
+        // The game's own menus (UGUI) must not react while the window is open: clicks on the window would otherwise reach
+        // the title menu below it (LOAD GAME, NEW GAME...). Every EventSystem is switched off and put back on close.
+        private readonly List<EventSystem> _mutedEventSystems = new List<EventSystem>();
+
+        private void MuteGameUi()
+        {
+            try
+            {
+                foreach (var es in FindObjectsOfType<EventSystem>())
+                    if (es != null && es.enabled) { es.enabled = false; _mutedEventSystems.Add(es); }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Could not switch off the game's UI input: " + e.Message); }
+        }
+
+        private void UnmuteGameUi()
+        {
+            foreach (var es in _mutedEventSystems) if (es != null) es.enabled = true;
+            _mutedEventSystems.Clear();
+        }
+
         private void LateUpdate()
         {
-            if (_open) { Cursor.lockState = CursorLockMode.None; Cursor.visible = true; return; }
+            if (_open)
+            {
+                Cursor.lockState = CursorLockMode.None; Cursor.visible = true;
+                if (Time.frameCount % 15 == 0) MuteGameUi();   // an EventSystem created later (scene load) is caught too
+                if (Time.timeScale != 0f && InputBlocker.Active) Time.timeScale = 0f;   // keep the game paused
+                return;
+            }
             if (_relockFrames > 0)
             {
                 _relockFrames--;
@@ -106,6 +135,7 @@ namespace Apocasetter
             {
                 _prevLock = Cursor.lockState; _prevVisible = Cursor.visible;
                 InputBlocker.Set(true);
+                MuteGameUi();
                 Catalog.Invalidate();
                 _pending.Clear(); _errors.Clear(); _dropdown = null; _rebind = null; _removeOpen = false; _keyUsers = null;
                 _toastDismissed = true;
@@ -114,6 +144,7 @@ namespace Apocasetter
             {
                 if (_pending.Count > 0) ApplyPending();
                 Cursor.lockState = _prevLock; Cursor.visible = _prevVisible;
+                UnmuteGameUi();
                 _unblockNextFrame = true; // keep blocking one more frame so the closing keypress isn't seen by the game
             }
         }
