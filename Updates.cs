@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
@@ -36,6 +37,7 @@ namespace Apocasetter
     public static class Updates
     {
         public const string IndexUrl = "https://raw.githubusercontent.com/DeonUrist/Apocasetter-Index/main/index.json";
+        public const string IndexApiUrl = "https://api.github.com/repos/DeonUrist/Apocasetter-Index/contents/index.json";
         public const string IndexPage = "https://github.com/DeonUrist/Apocasetter-Index";
         public const double CacheHours = 6;
 
@@ -91,17 +93,31 @@ namespace Apocasetter
             if (Checking) yield break;
             if (!force && CacheFresh) yield break;
             Checking = true; CheckError = null;
-            using (var req = UnityWebRequest.Get(IndexUrl))
+            // Sources, freshest first. The GitHub API serves main's index.json at once (60 requests/hour per IP without a login);
+            // raw.githubusercontent.com goes through a CDN (up to 5 min old). A unique query string and no-cache headers keep any cache on
+            // the player's side (Windows/ISP/antivirus proxies served a 2-hour-old index) from answering instead.
+            string stamp = DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture);
+            var sources = new List<KeyValuePair<string, bool>>();
+            if (force) sources.Add(new KeyValuePair<string, bool>(IndexApiUrl + "?t=" + stamp, true));
+            sources.Add(new KeyValuePair<string, bool>(IndexUrl + "?t=" + stamp, false));
+            bool done = false;
+            foreach (var src in sources)
             {
-                req.timeout = 20;
-                yield return req.SendWebRequest();
-                if (req.result != UnityWebRequest.Result.Success)
+                using (var req = UnityWebRequest.Get(src.Key))
                 {
-                    CheckError = req.error;
-                    Plugin.Log.LogWarning("Update check failed: " + req.error);
-                }
-                else
-                {
+                    req.timeout = 20;
+                    req.SetRequestHeader("Cache-Control", "no-cache");
+                    req.SetRequestHeader("Pragma", "no-cache");
+                    req.SetRequestHeader("User-Agent", "Apocasetter/" + Plugin.VERSION);
+                    if (src.Value) req.SetRequestHeader("Accept", "application/vnd.github.raw");
+                    yield return req.SendWebRequest();
+                    string via = src.Value ? "GitHub API" : "raw.githubusercontent.com";
+                    if (req.result != UnityWebRequest.Result.Success)
+                    {
+                        CheckError = req.error;
+                        Plugin.Log.LogWarning("Update check via " + via + " failed: " + req.error + " (HTTP " + req.responseCode + ")");
+                        continue;
+                    }
                     try
                     {
                         var text = req.downloadHandler.text;
@@ -109,10 +125,15 @@ namespace Apocasetter
                         File.WriteAllText(CachePath, text);
                         IndexTimeUtc = DateTime.UtcNow;
                         HaveIndex = true;
-                        Plugin.Log.LogInfo("Update check: index has " + Index.Count + " mods");
+                        CheckError = null;
+                        string generated = "";
+                        try { generated = MiniJson.Str(MiniJson.Obj(MiniJson.Parse(text)), "generated"); } catch { }
+                        Plugin.Log.LogInfo("Update check: index has " + Index.Count + " mods (built " + generated + ", via " + via + ")");
+                        done = true;
                     }
-                    catch (Exception e) { CheckError = "index unreadable: " + e.Message; Plugin.Log.LogWarning("Update check: " + e); }
+                    catch (Exception e) { CheckError = "index unreadable: " + e.Message; Plugin.Log.LogWarning("Update check via " + via + ": " + e); }
                 }
+                if (done) break;
             }
             Checking = false;
             Fire();
