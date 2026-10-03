@@ -416,22 +416,25 @@ namespace Apocasetter
             var im = m.Index;
 
             // header
-            var iconR = R(x0, TopY + 18, 66, 66);
+            var iconR = R(x0, TopY + 20, 66, 66);
             DrawIcon(iconR, m, S.Yellow, 0.6f);
             string name = (m.Name ?? "").ToUpperInvariant();
-            var nameSize = S.H1.CalcSize(new GUIContent(name));
-            float nameW = Mathf.Min(nameSize.x, U(430));
-            var nameR = new Rect(iconR.xMax + U(18), iconR.y + U(2), nameW, U(40));
-            S.Out(nameR, name, S.H1, S.White);
             string ver = m.Kind == ModKind.Available ? "not installed" : m.Kind == ModKind.Disabled ? "v" + m.Version + " · disabled" : "v" + m.Version;
-            S.Out(new Rect(nameR.xMax + U(12), nameR.y + U(10), U(200), U(26)), ver, S.BodyBold, S.Yellow);
+            float verW = S.BodyBold.CalcSize(new GUIContent(ver)).x + U(4);
+            var nameSize = S.H1.CalcSize(new GUIContent(name));
+            float nameX = iconR.xMax + U(18);
+            float nameW = Mathf.Min(nameSize.x + U(4), R(x0, 0, w0, 0).xMax - nameX - verW - U(12));
+            // the name sits under the header buttons, so it gets the full width of the pane
+            var nameR = new Rect(nameX, _wy + U(TopY + 50), nameW, U(32));
+            S.Out(nameR, name, S.H1, S.White);
+            S.Out(new Rect(nameR.xMax + U(10), nameR.y + U(6), verW, U(24)), ver, S.BodyBold, S.Yellow);
             var meta = new List<string>();
             if (im != null && !string.IsNullOrEmpty(im.Repo)) meta.Add("github.com/" + im.Repo);
             else if (m.Kind == ModKind.Loaded) meta.Add("no GitHub repo known");
             if (im != null && !string.IsNullOrEmpty(im.Author)) meta.Add("by " + im.Author);
             if (m.Config != null) meta.Add(Path.GetFileName(m.Config.ConfigFilePath));
             if (m.Other) meta.Add("GUID " + m.Guid);
-            S.Label(new Rect(nameR.x, nameR.yMax + U(4), U(560), U(20)), string.Join("  ·  ", meta.ToArray()), S.Small, S.Sub);
+            S.Label(new Rect(nameR.x, nameR.yMax + U(3), R(x0, 0, w0, 0).xMax - nameR.x, U(20)), string.Join("  ·  ", meta.ToArray()), S.Small, S.Sub);
 
             // header buttons (right)
             float bx = x0 + w0;
@@ -446,13 +449,13 @@ namespace Apocasetter
                 bx -= bw;
                 var col = b.Key == "REMOVE" ? S.Red : b.Key.StartsWith("INSTALL") || b.Key == "ENABLE" ? S.Yellow : S.White;
                 bool needsInstaller = b.Key != "GITHUB";
-                if (S.PlankButton(R(bx, TopY + 26, bw, 42), b.Key, col, null, !needsInstaller || Updates.InstallerPresent)) b.Value();
+                if (S.PlankButton(R(bx, TopY + 12, bw, 36), b.Key, col, null, !needsInstaller || Updates.InstallerPresent)) b.Value();
                 bx -= 6;
             }
-            if (m.Self) S.Label(R(bx - 150, TopY + 26, 146, 42), "can't remove itself", S.Small, S.Dim);
+            if (m.Self) S.Label(R(bx - 150, TopY + 12, 146, 36), "can't remove itself", S.Small, S.Dim);
 
             // banner
-            float y = TopY + 100;
+            float y = TopY + 112;
             float bh = DrawBanner(R(x0, y, w0, 62), m, st, im);
             if (bh > 0) y += bh + 8;
 
@@ -710,7 +713,7 @@ namespace Apocasetter
                 GUI.BeginGroup(dr);
                 S.Label(new Rect(0, 0, leftW, full), desc, S.Body, S.Desc);
                 GUI.EndGroup();
-                GUILayout.Space(U(4));
+                GUILayout.Space(U(10));
                 var cr = GUILayoutUtility.GetRect(leftW, U(20), GUILayout.Width(leftW), GUILayout.Height(U(20)));
                 float cx = cr.x;
                 if (longText)

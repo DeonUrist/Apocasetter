@@ -92,7 +92,7 @@ namespace Apocasetter
         {
             S = s; _builtFor = s;
             Title = Text(_display, 44); Title.clipping = TextClipping.Overflow;
-            H1 = Text(_display, 30);
+            H1 = Text(_display, 24);
             Btn = Text(_display, 15, TextAnchor.MiddleCenter); Btn.clipping = TextClipping.Overflow;
             BtnSmall = Text(_display, 13, TextAnchor.MiddleCenter); BtnSmall.clipping = TextClipping.Overflow;
             Section = Text(_display, 17);
