@@ -18,8 +18,9 @@ namespace Apocasetter
     // =====================================================================
     public class IndexMod
     {
-        public string Guid, Name, Author, Repo, Summary, Trust, PluginFolder, BlockedReason, Error;
-        public bool Blocked;
+        public string Guid, Name, Author, Repo, Summary, Trust, PluginFolder, BlockedReason, Error, DeprecatedReason;
+        public bool Blocked, Deprecated;
+        public List<string> ReplacedBy = new List<string>();
         public List<string> Tags = new List<string>(), Requires = new List<string>(), Optional = new List<string>();
         public string Version, Tag, Published, Page, Notes;
         public IndexZip Zip;
@@ -156,6 +157,8 @@ namespace Apocasetter
                     PluginFolder = MiniJson.Str(d, "pluginFolder", null), Blocked = MiniJson.Bool(d, "blocked", false),
                     BlockedReason = MiniJson.Str(d, "blockedReason"), Error = MiniJson.Str(d, "error", null),
                     Tags = MiniJson.StrList(d, "tags"), Requires = MiniJson.StrList(d, "requires"), Optional = MiniJson.StrList(d, "optional"),
+                    Deprecated = MiniJson.Bool(d, "deprecated", false), DeprecatedReason = MiniJson.Str(d, "deprecatedReason"),
+                    ReplacedBy = MiniJson.StrList(d, "replacedBy"),
                 };
                 var latest = MiniJson.Obj(d.ContainsKey("latest") ? d["latest"] : null);
                 if (latest != null)

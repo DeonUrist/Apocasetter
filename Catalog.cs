@@ -159,7 +159,7 @@ namespace Apocasetter
                 if (!list.Any(x => x.Guid == d.Guid))
                     list.Add(new ModEntry { Guid = d.Guid, Name = d.Name, Version = d.Version, Kind = ModKind.Disabled, DisabledInfo = d });
             foreach (var im in Updates.Index.Values)
-                if (!im.Blocked && !list.Any(x => x.Guid == im.Guid))
+                if (!im.Blocked && !im.Deprecated && !list.Any(x => x.Guid == im.Guid))   // deprecated mods are no longer offered for install
                     list.Add(new ModEntry { Guid = im.Guid, Name = im.Name, Version = null, Kind = ModKind.Available });
 
             _mods = list.OrderBy(m => m.Self ? 0 : 1).ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase).ToList();

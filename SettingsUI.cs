@@ -548,7 +548,7 @@ namespace Apocasetter
         private class ModStatus
         {
             public string Sub, Badge; public Color BadgeBg, BadgeFg;
-            public bool Update, Ahead, Staged, Downloading, Blocked, NoSource;
+            public bool Update, Ahead, Staged, Downloading, Blocked, NoSource, Deprecated;
             public string Staging;   // op kind
         }
 
@@ -577,6 +577,11 @@ namespace Apocasetter
                 else if (c > 0) { s.Update = true; s.Badge = "↑ " + im.Version; s.BadgeBg = S.Yellow; s.BadgeFg = Color.black; }
                 else if (c < 0) { s.Ahead = true; s.Sub += " · newer than GitHub"; }
                 else s.Sub += " · up to date";
+                if (im.Deprecated && !im.Blocked)
+                {
+                    s.Deprecated = true;
+                    if (!s.Update) { s.Badge = "DEPRECATED"; s.BadgeBg = S.Hex("2A2118"); s.BadgeFg = S.Hex("E8A33C"); }
+                }
             }
             else if (m.Kind == ModKind.Loaded && Updates.HaveIndex) { s.NoSource = true; s.Sub += " · no update source"; }
             if (Updates.Downloading.TryGetValue(m.Guid, out prog)) { s.Downloading = true; s.Badge = "DOWNLOADING"; s.BadgeBg = S.Hex("111111"); s.BadgeFg = S.Yellow; }
@@ -648,6 +653,11 @@ namespace Apocasetter
             float y = TopY + 112;
             float bh = DrawBanner(R(x0, y, w0, 62), m, st, im);
             if (bh > 0) y += bh + 8;
+            if (st.Deprecated && im != null)
+            {
+                float dh = DrawDeprecated(x0, y, w0, m, im);
+                if (dh > 0) y += dh + 8;
+            }
 
             // tabs
             int count = m.Entries.Count;
@@ -779,6 +789,42 @@ namespace Apocasetter
                 if (S.PlankButton(new Rect(r.xMax - bw - U(10), r.y + U(10), bw, U(42)), button, button == "UPDATE" ? S.Yellow : S.White, null, !needsInstaller || Updates.InstallerPresent)) act();
             }
             return 62;
+        }
+
+        /// Deprecated in the index: the maintainer's reason and up to 4 mods that take over (click one to open its page).
+        private float DrawDeprecated(float x0, float y, float w0, ModEntry m, IndexMod im)
+        {
+            var repl = im.ReplacedBy.Where(g => !string.IsNullOrEmpty(g) && g != m.Guid).Take(4).ToList();
+            float h = repl.Count > 0 ? 112 : 62;
+            var r = R(x0, y, w0, h);
+            S.Fill(r, Color.black);
+            S.Fill(new Rect(r.x + 2, r.y + 2, r.width - 4, r.height - 4), S.Hex("1C1610"));
+            S.Fill(new Rect(r.x + 2, r.y + 2, U(6), r.height - 4), S.Hex("E8A33C"));
+            float tx = r.x + U(22), tw = r.width - U(36);
+            S.Out(new Rect(tx, r.y + U(7), tw, U(26)), "DEPRECATED", S.Section, S.Hex("E8A33C"));
+            S.Label(new Rect(tx, r.y + U(33), tw, U(24)),
+                string.IsNullOrEmpty(im.DeprecatedReason) ? "This mod is no longer developed. It keeps working as it is, but gets no fixes." : im.DeprecatedReason, S.Small, S.Desc);
+            if (repl.Count == 0) return h;
+            float lx = R(x0 + 22, 0, 0, 0).x;
+            string lead = "TAKEN OVER BY";
+            float lw = S.Small.CalcSize(new GUIContent(lead)).x + U(12);
+            S.Label(new Rect(lx, r.y + U(64), lw, U(38)), lead, S.Small, S.Sub);
+            float bx = x0 + 22 + lw / _sc;
+            foreach (var g in repl)
+            {
+                var target = Catalog.Find(g);
+                bool have = target != null && target.Kind == ModKind.Loaded;
+                string label = (have ? "✓ " : "") + GuidName(g).ToUpperInvariant();
+                float bw = BW(label, 90, S.BtnSmall, 26);
+                if (bx + bw > x0 + w0 - 10) break;
+                if (S.PlankButton(R(bx, y + 64, bw, 38), label, have ? S.Green : S.Yellow, S.BtnSmall) && target != null)
+                {
+                    ApplyPending(); _selected = g; _filter = "all"; _search = ""; _rightScroll = Vector2.zero; _dropdown = null;
+                    if (target.Kind != ModKind.Loaded && _tab == "settings") _tab = "about";
+                }
+                bx += bw + 6;
+            }
+            return h;
         }
 
         private static string When(string iso)
@@ -1103,6 +1149,11 @@ namespace Apocasetter
             {
                 var deps = m.Dependents();
                 if (deps.Count > 0) AboutRow("Used by", string.Join(", ", deps.Select(d => d.Key + (d.Value ? "" : " (optional)")).ToArray()), cw);
+            }
+            if (im != null && im.Deprecated)
+            {
+                AboutRow("Status", "Deprecated" + (string.IsNullOrEmpty(im.DeprecatedReason) ? "" : ": " + im.DeprecatedReason), cw);
+                if (im.ReplacedBy.Count > 0) AboutRow("Taken over by", string.Join(", ", im.ReplacedBy.Take(4).Select(GuidName).ToArray()), cw);
             }
             if (im != null && im.Tags.Count > 0) AboutRow("Tags", string.Join(", ", im.Tags.ToArray()), cw);
             AboutRow("Plugin ID", m.Guid, cw);
