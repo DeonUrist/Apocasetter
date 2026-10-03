@@ -27,7 +27,7 @@ namespace Apocasetter
     {
         public const string GUID = "com.denis.apocalypter.apocasetter";
         public const string NAME = "Apocasetter";
-        public const string VERSION = "2.0.2";
+        public const string VERSION = "2.0.3";
 
         public static ManualLogSource Log;
         public static string PluginPath;

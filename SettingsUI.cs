@@ -796,7 +796,7 @@ namespace Apocasetter
                 bool waiting = _rebind == e;
                 S.SlotBox(kr);
                 if (Conflict(m, e) != null) { S.Fill(new Rect(kr.x, kr.yMax - U(3), kr.width, U(3)), S.Hex("E0452F")); }
-                S.Label(kr, waiting ? "…" : val, new GUIStyle(S.ListName) { alignment = TextAnchor.MiddleCenter }, S.White);
+                S.Label(kr, waiting ? "…" : val, S.Value, S.White);
                 if (GUI.Button(kr, GUIContent.none, S.Invisible)) _rebind = waiting ? null : e;
                 S.Label(new Rect(kr.x - U(20), kr.yMax + U(3), kr.width + U(40), U(14)), waiting ? "PRESS A KEY · ESC CANCELS · DEL CLEARS" : "CLICK TO REBIND", S.Tiny, S.Yellow);
             }
@@ -808,7 +808,7 @@ namespace Apocasetter
                 var vr = new Rect(nx.x - U(144), ctrl.y, U(142), U(38));
                 var pv = new Rect(vr.x - U(42), ctrl.y, U(40), U(38));
                 if (S.PlankButton(pv, "‹", S.White)) Cycle(e, options, cur, -1);
-                if (S.PlankButton(vr, cur, S.Yellow, new GUIStyle(S.ListName) { alignment = TextAnchor.MiddleCenter })) { _dropdown = _dropdown == e ? null : e; _dropScroll = Vector2.zero; }
+                if (S.PlankButton(vr, cur, S.Yellow, S.Value)) { _dropdown = _dropdown == e ? null : e; _dropScroll = Vector2.zero; }
                 if (S.PlankButton(nx, "›", S.White)) Cycle(e, options, cur, +1);
             }
             else if (ranged)
@@ -902,7 +902,7 @@ namespace Apocasetter
         }
         private GUIStyle NumField()
         {
-            if (_numField == null || _numField.fontSize != S.TextField.fontSize) _numField = new GUIStyle(S.TextField) { alignment = TextAnchor.MiddleRight };
+            if (_numField != S.NumberField) _numField = S.NumberField;
             return _numField;
         }
 
@@ -1215,6 +1215,7 @@ namespace Apocasetter
         }
 
         // ---------------------------------------------------------------- MODS badge + title-screen notice (window closed)
+        private GUIStyle _badgeFont;
         private void DrawMenuExtras()
         {
             if (!GameMenu.ButtonOnScreen && !GameMenu.HasButton && (GameMenu.MenuVisible || (!GameMenu.InGame && Cursor.visible))) DrawFallbackButton();
@@ -1229,11 +1230,19 @@ namespace Apocasetter
             if (updates.Count > 0)
                 foreach (var r in rects)
                 {
-                    var b = new Rect(r.xMax - U(20), r.y - U(10), U(30), U(30));
+                    // centred on the button's right edge, sized from the button, number in the game's menu font
+                    float d = Mathf.Round(Mathf.Clamp(r.height * 0.64f, U(22), U(42)));
+                    var b = new Rect(Mathf.Round(r.xMax - d * 0.65f), Mathf.Round(r.center.y - d / 2), d, d);
                     var old = GUI.color; GUI.color = S.Yellow;
                     if (S.Knob != null) GUI.DrawTexture(b, S.Knob); else S.Fill(b, S.Yellow);
                     GUI.color = old;
-                    S.Label(b, updates.Count.ToString(), new GUIStyle(S.ListName) { alignment = TextAnchor.MiddleCenter }, Color.black);
+                    int fs = Mathf.Max(8, Mathf.RoundToInt(d * 0.6f));
+                    if (_badgeFont == null || _badgeFont.fontSize != fs || _badgeFont.font != S.Tab.font)
+                    {
+                        _badgeFont = new GUIStyle(S.Tab) { fontSize = fs, alignment = TextAnchor.MiddleCenter, clipping = TextClipping.Overflow, padding = new RectOffset() };
+                        GameSkin.CenterText(_badgeFont, "0123456789");
+                    }
+                    S.Label(b, updates.Count.ToString(), _badgeFont, Color.black);
                 }
             // once per game start, on the title screen only
             if (_toastDismissed || GameMenu.InGame || (updates.Count == 0 && Updates.LastResults.Count == 0)) return;

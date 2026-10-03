@@ -22,6 +22,7 @@ namespace Apocasetter
             Dim = Hex("7E766B"), Red = Hex("FF6B57"), Green = Hex("CFE39A"), Black = Color.black, Line = Hex("2B241E"), Pit = new Color(0.035f, 0.027f, 0.024f, 0.9f);
 
         public static Texture2D Rust, Chains, RebarH, RebarV, Plank, PlankHover, PlankDown, Knob, Rivet, Slot, Hazard, Px, Track, Thumb, Field;
+        public static GUIStyle Value, NumberField;
         public static GUIStyle Title, H1, Btn, BtnSmall, Section, Tab, Body, BodyBold, Small, Tiny, ListName, ListSub, TextField, PlankStyle,
             Invisible, ScrollV, ScrollThumb, Mono;
 
@@ -113,6 +114,12 @@ namespace Apocasetter
             foreach (var st in new[] { TextField.normal, TextField.hover, TextField.focused, TextField.active, TextField.onNormal, TextField.onFocused })
             { st.background = Field; st.textColor = White; }
             TextField.focused.background = Slot;
+            CenterText(TextField, "Hg");
+            // setting values (numbers, key names, list values) in the game's menu font, glyphs centred vertically
+            Value = Text(_display, 17, TextAnchor.MiddleCenter); Value.clipping = TextClipping.Overflow;
+            CenterText(Value, "0Q");
+            NumberField = new GUIStyle(TextField) { font = _display, fontSize = F(17), alignment = TextAnchor.MiddleRight, padding = new RectOffset(F(8), F(8), 0, 0) };
+            CenterText(NumberField, "0");
 
             Invisible = new GUIStyle(GUIStyle.none);
             ScrollV = new GUIStyle(GUI.skin.verticalScrollbar) { fixedWidth = F(8), border = new RectOffset(2, 2, 2, 2), margin = new RectOffset(F(4), 0, 0, 0) };
@@ -190,6 +197,38 @@ namespace Apocasetter
                 GUI.DrawTexture(new Rect(r.x + m, r.yMax - m - k, k, k), Rivet);
                 GUI.DrawTexture(new Rect(r.xMax - m - k, r.yMax - m - k, k, k), Rivet);
             }
+        }
+
+        /// IMGUI centres a font's whole line box (ascent + descent), so digits and capitals sit off-centre with fonts that have a big
+        /// descent or ascent. Shift the content by padding so the sample glyphs' own middle lands on the rect's middle.
+        private static readonly HashSet<string> _centerLogged = new HashSet<string>();
+        public static void CenterText(GUIStyle st, string sample)
+        {
+            try
+            {
+                var f = st.font;
+                if (f == null || st.fontSize <= 0) return;
+                f.RequestCharactersInTexture(sample, st.fontSize, st.fontStyle);
+                float minY = float.MaxValue, maxY = float.MinValue;
+                foreach (var c in sample)
+                {
+                    CharacterInfo ci;
+                    if (!f.GetCharacterInfo(c, out ci, st.fontSize, st.fontStyle)) continue;
+                    minY = Mathf.Min(minY, ci.minY); maxY = Mathf.Max(maxY, ci.maxY);
+                }
+                if (minY > maxY) return;
+                float scale = f.dynamic && f.fontSize > 0 ? st.fontSize / (float)f.fontSize : 1f;
+                float asc = f.ascent * scale, lh = f.lineHeight * scale;
+                float dy = lh / 2f - (asc - (maxY + minY) / 2f);   // > 0: glyphs sit too high, push them down
+                int p = Mathf.Clamp(Mathf.RoundToInt(Mathf.Abs(dy) * 2f), 0, st.fontSize);
+                var pad = st.padding;
+                if (dy > 0) st.padding = new RectOffset(pad.left, pad.right, pad.top + p, pad.bottom);
+                else st.padding = new RectOffset(pad.left, pad.right, pad.top, pad.bottom + p);
+                var key = f.name + "/" + st.fontSize;
+                if (_centerLogged.Add(key))
+                    Plugin.Log.LogInfo("Text centring " + key + ": ascent " + asc.ToString("0.0") + " line " + lh.ToString("0.0") + " glyphs " + minY + ".." + maxY + " → shift " + dy.ToString("0.0"));
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("CenterText: " + e.Message); }
         }
 
         public static void SlotBox(Rect r)
