@@ -66,7 +66,8 @@ players read it in full. Plugins without the line still show up under **Other pl
 - mod in its own folder → `BepInEx\plugins\YourMod\icon.png`
 - single DLL directly in `plugins` → `YourMod.png` next to `YourMod.dll`
 
-Put it in your release zip so it is installed with the mod. Without an icon the list shows your mod's initials.
+Put it in your release zip so it is installed with the mod. The index also copies it out of the zip (PNG up to 256×256 and
+48 KB), so players see it in the list before they install the mod. Without an icon the list shows your mod's initials.
 
 **3. Get update notices and one-click install.**
 

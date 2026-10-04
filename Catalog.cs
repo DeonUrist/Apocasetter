@@ -186,16 +186,52 @@ namespace Apocasetter
             return false;
         }
 
-        // icon.png in the mod's own folder, <Dll>.png beside a loose DLL, or Apocasetter's own theme\game\icons\<guid>.png
+        // icon.png in the mod's own folder, <Dll>.png beside a loose DLL, the icon the index copied out of the release zip
+        // (shows before the mod is installed), or Apocasetter's own theme\game\icons\<guid>.png
         public static Texture2D LoadIcon(ModEntry m)
         {
+            var own = LoadIconFile(m, false);
+            if (own != null) return own;
+            var fromIndex = IndexIcon(m.Index);
+            if (fromIndex != null) return fromIndex;
+            return LoadIconFile(m, true);
+        }
+
+        // decoded index icons by sha256: the catalog is rebuilt often, the textures are made once
+        private static readonly Dictionary<string, Texture2D> _indexIcons = new Dictionary<string, Texture2D>();
+
+        private static Texture2D IndexIcon(IndexMod im)
+        {
+            if (im == null || im.Zip == null || string.IsNullOrEmpty(im.Zip.IconPng)) return null;
+            var key = im.Zip.IconSha256 ?? im.Guid;
+            Texture2D t;
+            if (_indexIcons.TryGetValue(key, out t)) return t;
+            t = null;
+            try
+            {
+                var bytes = Convert.FromBase64String(im.Zip.IconPng);
+                var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                if (ImageConversion.LoadImage(tex, bytes, false))
+                {
+                    tex.hideFlags = HideFlags.HideAndDontSave; tex.filterMode = FilterMode.Bilinear; tex.wrapMode = TextureWrapMode.Clamp;
+                    t = tex;
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Index icon for " + im.Guid + ": " + e.Message); }
+            _indexIcons[key] = t;
+            return t;
+        }
+
+        private static Texture2D LoadIconFile(ModEntry m, bool theme)
+        {
             var candidates = new List<string>();
-            if (!string.IsNullOrEmpty(m.Location))
+            if (theme)
+                candidates.Add(Path.Combine(Path.Combine(GameSkin.Dir, "icons"), m.Guid + ".png"));
+            else if (!string.IsNullOrEmpty(m.Location))
             {
                 if (m.PluginFolder != null) candidates.Add(Path.Combine(Path.GetDirectoryName(m.Location), "icon.png"));
                 candidates.Add(Path.ChangeExtension(m.Location, ".png"));
             }
-            candidates.Add(Path.Combine(Path.Combine(GameSkin.Dir, "icons"), m.Guid + ".png"));
             foreach (var p in candidates)
             {
                 try

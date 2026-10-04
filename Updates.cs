@@ -29,6 +29,7 @@ namespace Apocasetter
     public class IndexZip
     {
         public string Name, Url, Sha256, ExtractTo, StripPrefix, TopFolder, GuidDll;
+        public string IconPng, IconSha256;   // the mod's icon.png copied out of the zip by the index (base64), so it shows before install
         public long Size;
         public List<string> Skip = new List<string>();
     }
@@ -174,6 +175,8 @@ namespace Apocasetter
                             TopFolder = MiniJson.Str(z, "topFolder", null), GuidDll = MiniJson.Str(z, "guidDll"),
                             Size = (long)MiniJson.Num(z, "size", 0), Skip = MiniJson.StrList(z, "skip")
                         };
+                    var ic = z != null ? MiniJson.Obj(z.ContainsKey("icon") ? z["icon"] : null) : null;
+                    if (ic != null) { m.Zip.IconPng = MiniJson.Str(ic, "png", null); m.Zip.IconSha256 = MiniJson.Str(ic, "sha256", null); }
                 }
                 if (!string.IsNullOrEmpty(m.Guid)) Index[m.Guid] = m;
             }
