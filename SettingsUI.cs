@@ -577,6 +577,8 @@ namespace Apocasetter
                 else if (c > 0) { s.Update = true; s.Badge = "↑ " + im.Version; s.BadgeBg = S.Yellow; s.BadgeFg = Color.black; }
                 else if (c < 0) { s.Ahead = true; s.Sub += " · newer than GitHub"; }
                 else s.Sub += " · up to date";
+                if (!im.Blocked && !s.Update && MissingRequirements(im).Count > 0)
+                { s.Badge = "NEEDS " + GuidName(MissingRequirements(im)[0]).ToUpperInvariant(); s.BadgeBg = S.Hex("3A0D09"); s.BadgeFg = S.Hex("FF8A78"); }
                 if (im.Deprecated && !im.Blocked)
                 {
                     s.Deprecated = true;
@@ -637,7 +639,7 @@ namespace Apocasetter
             var buttons = new List<KeyValuePair<string, Action>>();
             if (m.Kind == ModKind.Loaded && !m.Self && !st.Staged) buttons.Add(new KeyValuePair<string, Action>("REMOVE", () => { _removeOpen = true; _removeCfg = false; }));
             if (m.Kind == ModKind.Available && !st.Staged && !st.Downloading && im != null && im.Zip != null) buttons.Add(new KeyValuePair<string, Action>("INSTALL " + im.Version, () => Install(m)));
-            if (m.Kind == ModKind.Disabled && !st.Staged) buttons.Add(new KeyValuePair<string, Action>("ENABLE", () => StageSimple(m, "enable", null, false)));
+            if (m.Kind == ModKind.Disabled && !st.Staged) buttons.Add(new KeyValuePair<string, Action>("ENABLE", () => { StageSimple(m, "enable", null, false); if (im != null) ProvideRequirements(m, im); }));
             if (im != null && !string.IsNullOrEmpty(im.Repo)) buttons.Add(new KeyValuePair<string, Action>("GITHUB", () => Application.OpenURL("https://github.com/" + im.Repo)));
             foreach (var b in buttons)
             {
@@ -661,6 +663,10 @@ namespace Apocasetter
             {
                 float th = DrawTakeover(x0, y, w0, m, im);
                 if (th > 0) y += th + 8;
+            }
+            {
+                float rh = DrawRequirements(x0, y, w0, m, im);
+                if (rh > 0) y += rh + 8;
             }
 
             // tabs
@@ -761,7 +767,9 @@ namespace Apocasetter
                 if (im.Zip != null)
                 {
                     sub = "Released " + When(im.Published) + " · " + im.Zip.Name + " · " + Size(im.Zip.Size) + " · installs on the next game start, settings kept";
-                    button = "UPDATE"; act = () => Download(m, im);
+                    var need = MissingRequirements(im);
+                    if (need.Count > 0) sub = "Released " + When(im.Published) + " · " + Size(im.Zip.Size) + " · also installs " + string.Join(", ", need.Select(GuidName).ToArray()) + ", which this version needs";
+                    button = "UPDATE"; act = () => { Download(m, im); ProvideRequirements(m, im); };
                 }
                 else { sub = "This release has no .zip attached, so it can't be installed from here."; button = "RELEASE PAGE"; act = () => Application.OpenURL(im.Page); }
             }
@@ -792,6 +800,85 @@ namespace Apocasetter
                 bool needsInstaller = button == "UPDATE" || button == "TRY AGAIN";
                 if (S.PlankButton(new Rect(r.xMax - bw - U(10), r.y + U(10), bw, U(42)), button, button == "UPDATE" ? S.Yellow : S.White, null, !needsInstaller || Updates.InstallerPresent)) act();
             }
+            return 62;
+        }
+
+        /// Index "requires" of a mod that aren't installed and enabled (and aren't already being installed/enabled).
+        private static List<string> MissingRequirements(IndexMod im)
+        {
+            var r = new List<string>();
+            if (im == null) return r;
+            foreach (var g in im.Requires)
+            {
+                if (string.IsNullOrEmpty(g)) continue;
+                var x = Catalog.Find(g);
+                var op = Updates.OpFor(g);
+                string kind = op != null ? MiniJson.Str(op, "op") : null;
+                bool coming = kind == "install" || kind == "enable" || kind == "update";
+                bool leaving = kind == "remove" || kind == "disable";
+                if (x != null && x.Kind == ModKind.Loaded && !leaving) continue;
+                if (coming) continue;
+                r.Add(g);
+            }
+            return r;
+        }
+
+        /// Make a required mod available: ENABLE when it's disabled, INSTALL when the index has a zip. Returns what was done.
+        private string ProvideRequirement(string guid)
+        {
+            var x = Catalog.Find(guid);
+            var ix = Updates.Find(guid);
+            if (x != null && x.Kind == ModKind.Disabled) { StageSimple(x, "enable", null, false); return "enabled"; }
+            if (x != null && x.Kind == ModKind.Available && ix != null && ix.Zip != null) { Download(x, ix); return "installed"; }
+            return null;
+        }
+
+        /// Installed, enabled mods that need `m` (index "requires" or a hard [BepInDependency]) and aren't already leaving.
+        private static List<ModEntry> HardDependents(ModEntry m)
+        {
+            var r = new List<ModEntry>();
+            foreach (var x in Catalog.All())
+            {
+                if (x.Guid == m.Guid || x.Kind != ModKind.Loaded) continue;
+                var op = Updates.OpFor(x.Guid);
+                if (op != null && (MiniJson.Str(op, "op") == "remove" || MiniJson.Str(op, "op") == "disable")) continue;
+                bool needs = x.Index != null && x.Index.Requires.Contains(m.Guid);
+                if (!needs && x.Info != null)
+                    foreach (var d in x.Info.Dependencies ?? Enumerable.Empty<BepInDependency>())
+                        if (d.DependencyGUID == m.Guid && (d.Flags & BepInDependency.DependencyFlags.HardDependency) != 0) { needs = true; break; }
+                if (needs) r.Add(x);
+            }
+            return r;
+        }
+
+        /// Red block when an installed mod lacks something it requires (index "requires"), with INSTALL / ENABLE.
+        private float DrawRequirements(float x0, float y, float w0, ModEntry m, IndexMod im)
+        {
+            if (m.Kind != ModKind.Loaded || im == null) return 0;
+            var missing = MissingRequirements(im);
+            if (missing.Count == 0) return 0;
+            var r = R(x0, y, w0, 62);
+            S.Fill(r, Color.black);
+            S.Fill(new Rect(r.x + 2, r.y + 2, r.width - 4, r.height - 4), S.Hex("1E0907"));
+            var names = missing.Select(GuidName).ToArray();
+            string title = "NEEDS " + string.Join(", ", names).ToUpperInvariant();
+            string sub = m.Name + " can't work without " + string.Join(", ", names) + ".";
+            float bx = r.xMax - U(10);
+            var providable = missing.Where(g => { var x = Catalog.Find(g); var ix = Updates.Find(g);
+                                                  return x != null && (x.Kind == ModKind.Disabled || (x.Kind == ModKind.Available && ix != null && ix.Zip != null)); }).ToList();
+            foreach (var g in providable.Take(2))
+            {
+                var x = Catalog.Find(g);
+                string label = (x.Kind == ModKind.Disabled ? "ENABLE " : "INSTALL ") + x.Name.ToUpperInvariant();
+                float bw = U(BW(label, 120, S.BtnSmall, 26));
+                bx -= bw;
+                if (S.PlankButton(new Rect(bx, r.y + U(12), bw, U(38)), label, S.Yellow, S.BtnSmall, Updates.InstallerPresent)) ProvideRequirement(g);
+                bx -= U(6);
+            }
+            if (providable.Count == 0) sub += " It isn't in the Apocasetter index, so it has to be installed by hand.";
+            float tx = r.x + U(14), tw = bx - tx - U(10);
+            S.Out(new Rect(tx, r.y + U(7), tw, U(26)), title, S.Section, S.Hex("FF8A78"));
+            S.Label(new Rect(tx, r.y + U(33), tw, U(24)), sub, S.Small, S.Desc);
             return 62;
         }
 
@@ -1219,7 +1306,11 @@ namespace Apocasetter
                 AboutRow("Latest", im.Version + (string.IsNullOrEmpty(im.Published) ? "" : " · released " + When(im.Published)), cw);
             if (im != null && !string.IsNullOrEmpty(im.Repo)) AboutRow("GitHub", im.Repo, cw);
             if (im != null && im.Requires.Count > 0)
-                AboutRow("Needs", string.Join(", ", im.Requires.Select(GuidName).ToArray()) + (m.Kind == ModKind.Available ? " (installed together)" : ""), cw);
+            {
+                var miss = MissingRequirements(im);
+                AboutRow("Needs", string.Join(", ", im.Requires.Select(g => GuidName(g) + (miss.Contains(g) ? " (MISSING)" : "")).ToArray())
+                                  + (m.Kind == ModKind.Available ? " (installed together)" : ""), cw);
+            }
             if (im != null && im.Optional.Count > 0) AboutRow("Works with", string.Join(", ", im.Optional.Select(GuidName).ToArray()), cw);
             if (m.Kind == ModKind.Loaded)
             {
@@ -1414,11 +1505,13 @@ namespace Apocasetter
             var plugin = m.PluginPaths();
             var cfgs = m.ConfigPaths();
             var deps = m.Dependents();
+            var hardDeps = HardDependents(m);
             float rw = BW("REMOVE", 130), dw = BW("DISABLE INSTEAD", 190), cw2 = BW("CANCEL", 120);
             float w = Mathf.Max(620, rw + dw + cw2 + 12 + 60);
             string intro = m.Name + " " + m.Version + " keeps running until you quit. On the next start its files are moved to BepInEx\\cache\\Apocasetter\\removed\\, so you can put them back.";
             float introH = S.Body.CalcHeight(new GUIContent(intro), U(w - 76)) / _sc;
-            float h = 70 + introH + 18 + plugin.Count * 24 + 24 + 54 + (deps.Count > 0 ? 50 : 0) + 70;
+            bool depRow = deps.Count > 0 || hardDeps.Count > 0;
+            float h = 70 + introH + 18 + plugin.Count * 24 + 24 + 54 + (depRow ? 50 : 0) + 70;
             float x = (WW - w) / 2, y = (WH - h) / 2;
             var box = R(x, y, w, h);
             S.RustBack(box);
@@ -1442,14 +1535,14 @@ namespace Apocasetter
             S.Label(new Rect(cl.x, cl.y + U(24), cl.width, U(22)), cfgs.Count == 0 ? "(none found)" : string.Join(", ", cfgs.Select(Rel).ToArray()), S.Small, S.Desc);
             if (GUI.Button(new Rect(cb.x, cb.y, cl.xMax - cb.x, U(46)), GUIContent.none, S.Invisible)) _removeCfg = !_removeCfg;
             cy += 54;
-            if (deps.Count > 0)
+            if (depRow)
             {
                 var wr = R(x + 30, cy, w - 60, 42);
                 S.Fill(wr, S.Hex("0C0A08"));
                 S.HazardStrip(new Rect(wr.x, wr.y, U(12), wr.height));
-                var hard = deps.Where(d => d.Value).Select(d => d.Key).ToArray();
-                var soft = deps.Where(d => !d.Value).Select(d => d.Key).ToArray();
-                string warn = hard.Length > 0 ? string.Join(", ", hard) + (hard.Length == 1 ? " needs it and won't load without it." : " need it and won't load without it.")
+                var hard = deps.Where(d => d.Value).Select(d => d.Key).Union(hardDeps.Select(hd => hd.Name)).ToArray();
+                var soft = deps.Where(d => !d.Value).Select(d => d.Key).Where(n => !hard.Contains(n)).ToArray();
+                string warn = hard.Length > 0 ? string.Join(", ", hard) + (hard.Length == 1 ? " needs it and will be disabled with it (ENABLE brings both back)." : " need it and will be disabled with it (ENABLE brings them back).")
                                               : string.Join(", ", soft) + " " + (soft.Length == 1 ? "has" : "have") + " extra features for it and keep working without it.";
                 S.Label(new Rect(wr.x + U(22), wr.y, wr.width - U(30), wr.height), warn, S.Small, S.Yellow);
                 cy += 50;
@@ -1459,8 +1552,13 @@ namespace Apocasetter
             bx -= dw + 6; bool doDisable = S.PlankButton(R(bx, cy + 8, dw, 44), "DISABLE INSTEAD", S.White);
             bx -= cw2 + 6; bool cancel = S.PlankButton(R(bx, cy + 8, cw2, 44), "CANCEL", S.White);
             if (cancel) _removeOpen = false;
-            if (doDisable) { StageSimple(m, "disable", null, false); _removeOpen = false; }
-            if (doRemove) { StageSimple(m, "remove", null, _removeCfg); _removeOpen = false; }
+            if (doDisable || doRemove)
+            {
+                StageSimple(m, doRemove ? "remove" : "disable", null, doRemove && _removeCfg);
+                // mods that can't run without it are disabled at the same restart (never removed: their files and settings stay)
+                foreach (var hd in hardDeps) { StageSimple(hd, "disable", null, false); SetStatus(hd.Name + " will be disabled too: it needs " + m.Name + "."); }
+                _removeOpen = false;
+            }
         }
 
         // ---------------------------------------------------------------- actions
@@ -1486,12 +1584,17 @@ namespace Apocasetter
                 StageSimple(old, "disable", null, false);
                 SetStatus(old.Name + " will be disabled at the next start: " + m.Name + " takes over its features.");
             }
-            foreach (var req in im.Requires)
+            ProvideRequirements(m, im);
+        }
+
+        /// Everything in the index "requires" that isn't installed and enabled is installed or enabled at the same restart.
+        private void ProvideRequirements(ModEntry m, IndexMod im)
+        {
+            foreach (var req in MissingRequirements(im))
             {
-                if (Catalog.All().Any(x => x.Guid == req && x.Kind == ModKind.Loaded) || Updates.OpFor(req) != null) continue;
-                var rm = Catalog.Find(req);
-                var rim = Updates.Find(req);
-                if (rm != null && rim != null && rim.Zip != null) Download(rm, rim);
+                var what = ProvideRequirement(req);
+                if (what != null) SetStatus(GuidName(req) + " will be " + what + " too: " + m.Name + " needs it.");
+                else SetStatus(m.Name + " needs " + GuidName(req) + ", which isn't in the index; install it by hand.");
             }
         }
 
