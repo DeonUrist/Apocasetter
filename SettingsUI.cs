@@ -164,6 +164,20 @@ namespace Apocasetter
 
         private void PollRebind()
         {
+            // mouse buttons (not the left one: it works the window, and a click elsewhere must not become a binding)
+            var ms = Mouse.current;
+            if (ms != null)
+            {
+                string btn = ms.rightButton.wasPressedThisFrame ? "Mouse1" : ms.middleButton.wasPressedThisFrame ? "Mouse2"
+                           : ms.backButton.wasPressedThisFrame ? "Mouse3" : ms.forwardButton.wasPressedThisFrame ? "Mouse4" : null;
+                if (btn != null)
+                {
+                    var me = _rebind;
+                    _rebind = null;
+                    SetMouseButton(me, btn);
+                    return;
+                }
+            }
             var kb = Keyboard.current;
             if (kb == null) { _rebind = null; return; }
             foreach (var k in kb.allKeys)
@@ -1755,6 +1769,18 @@ namespace Apocasetter
                 else if (!Enum.TryParse(name, true, out kc)) { SetStatus("That key can't be stored in " + e.Definition.Key); return; }
             }
             else if (t == typeof(string) && k == Key.None) name = "";
+            SetSerialized(e, name);
+            _keyUsers = null;
+        }
+
+        /// Mouse buttons exist only in Unity's KeyCode list (Mouse0..Mouse6); a setting typed as an Input System Key can't hold one.
+        private void SetMouseButton(ConfigEntryBase e, string name)
+        {
+            if (e.SettingType != typeof(KeyCode))
+            {
+                SetStatus(e.Definition.Key + " only takes keyboard keys (the mod would have to store it as a KeyCode for mouse buttons)");
+                return;
+            }
             SetSerialized(e, name);
             _keyUsers = null;
         }
