@@ -1764,6 +1764,14 @@ namespace Apocasetter
                 else if (k == Key.Enter) name = "Return";
                 else if (k == Key.LeftCtrl) name = "LeftControl";
                 else if (k == Key.RightCtrl) name = "RightControl";
+                // Input System names that differ from Unity's KeyCode names (Numpad0..9 and NumpadMinus/Plus/... → Keypad...)
+                else if (name.StartsWith("Numpad")) name = "Keypad" + name.Substring(6);
+                else if (k == Key.Backquote) name = "BackQuote";
+                else if (k == Key.LeftMeta) name = "LeftWindows";
+                else if (k == Key.RightMeta) name = "RightWindows";
+                else if (k == Key.ContextMenu) name = "Menu";
+                else if (k == Key.PrintScreen) name = "Print";
+                else if (k == Key.NumLock) name = "Numlock";
                 KeyCode kc;
                 if (k == Key.None) name = "None";
                 else if (!Enum.TryParse(name, true, out kc)) { SetStatus("That key can't be stored in " + e.Definition.Key); return; }
