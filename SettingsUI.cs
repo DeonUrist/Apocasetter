@@ -39,7 +39,7 @@ namespace Apocasetter
         private readonly Dictionary<ConfigEntryBase, string> _pending = new Dictionary<ConfigEntryBase, string>();
         private readonly Dictionary<ConfigEntryBase, string> _errors = new Dictionary<ConfigEntryBase, string>();
         private ConfigEntryBase _dropdown, _rebind, _sliderDrag;
-        private readonly HashSet<string> _showAll = new HashSet<string>(), _showOther = new HashSet<string>();
+        private readonly HashSet<string> _showAll = new HashSet<string>(), _showOther = new HashSet<string>(), _debugOpen = new HashSet<string>();
         private bool _removeOpen, _removeCfg;
         private string _status = "";
         private float _statusUntil;
@@ -1062,10 +1062,22 @@ namespace Apocasetter
                 var hr = GUILayoutUtility.GetRect(cw, U(26), GUILayout.Width(cw), GUILayout.Height(U(26)));
                 var titleW = S.Section.CalcSize(new GUIContent(kv.Key.ToUpperInvariant())).x;
                 S.Out(new Rect(hr.x, hr.y, titleW + U(4), hr.height), kv.Key.ToUpperInvariant(), S.Section, S.White);
-                var cnt = rows.Count + (rows.Count == 1 ? " setting" : " settings");
+                // Debug sections start folded; clicking the header opens/closes them (a search shows them anyway)
+                bool debug = kv.Key.IndexOf("debug", StringComparison.OrdinalIgnoreCase) >= 0 && q.Length == 0;
+                bool debugOpen = _debugOpen.Contains(m.Guid + "|" + kv.Key);
+                var cnt = rows.Count + (rows.Count == 1 ? " setting" : " settings") + (debug ? (debugOpen ? " · HIDE" : " · SHOW") : "");
                 var cntW = S.Small.CalcSize(new GUIContent(cnt)).x;
                 S.Fill(new Rect(hr.x + titleW + U(14), hr.center.y, hr.width - titleW - cntW - U(28), U(2)), S.Line);
-                S.Label(new Rect(hr.xMax - cntW, hr.y, cntW, hr.height), cnt, S.Small, S.Dim);
+                S.Label(new Rect(hr.xMax - cntW, hr.y, cntW, hr.height), cnt, S.Small, debug && hr.Contains(Event.current.mousePosition) ? S.White : S.Dim);
+                if (debug)
+                {
+                    if (GUI.Button(hr, GUIContent.none, GUIStyle.none))
+                    {
+                        if (debugOpen) _debugOpen.Remove(m.Guid + "|" + kv.Key); else _debugOpen.Add(m.Guid + "|" + kv.Key);
+                        debugOpen = !debugOpen;
+                    }
+                    if (!debugOpen) continue;
+                }
 
                 bool collapsed = rows.Count > 40 && q.Length == 0 && !_showAll.Contains(m.Guid + "|" + kv.Key);
                 if (collapsed)
