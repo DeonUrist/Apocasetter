@@ -29,17 +29,24 @@ namespace Apocasetter
 
         // window geometry in "virtual" units (1 = 1 px on a 1280x720 screen)
         private const float WW = 1220, WH = 688, FR = 20;
-        private const float RailX = 36, RailW = 276, TopY = 96, PaneX = 328, PaneW = 856, BottomY = 616;
+        private const float RailX = 36, RailW = 316, TopY = 96, PaneX = 368, PaneW = 816, BottomY = 616;
         private float _sc = 1, _wx, _wy;
 
         private bool _open;
         private string _selected = "";
         private string _filter = "all", _tab = "settings", _search = "", _settingSearch = "";
+        private readonly HashSet<string> _trustFilters = new HashSet<string> { "official", "community" };
         private Vector2 _listScroll, _rightScroll, _dropScroll;
         private readonly Dictionary<ConfigEntryBase, string> _pending = new Dictionary<ConfigEntryBase, string>();
         private readonly Dictionary<ConfigEntryBase, string> _errors = new Dictionary<ConfigEntryBase, string>();
         private ConfigEntryBase _dropdown, _rebind, _sliderDrag;
-        private readonly HashSet<string> _showAll = new HashSet<string>(), _showOther = new HashSet<string>(), _debugOpen = new HashSet<string>();
+        private readonly HashSet<string> _showOther = new HashSet<string>();
+        private readonly Dictionary<string, string> _sectionSelections = new Dictionary<string, string>();
+        private ModEntry _sectionMod;
+        private List<string> _sections;
+        private List<KeyValuePair<string, List<ConfigEntryBase>>> _sectionEntries;
+        private string _section;
+        private Vector2 _sectionScroll;
         private bool _removeOpen, _removeCfg;
         private string _status = "";
         private float _statusUntil;
@@ -57,24 +64,54 @@ namespace Apocasetter
         // cursor bookkeeping (1.0.1: re-lock after Alt+Tab)
         private CursorLockMode _prevLock, _lastLock = CursorLockMode.None;
         private bool _prevVisible, _lastVisible = true, _unblockNextFrame;
-        private int _relockFrames;
+        private bool _restoreOnFocus;
+        private int _releaseFrame;
+        private bool _clearGuiFocus;
+        private Action _openAction;
 
         private static readonly Dictionary<string, string> GameKeys = new Dictionary<string, string> { { "F2", "the game (Heal)" }, { "F9", "the game (hide UI)" } };
 
-        private void Awake() { Instance = this; }
+        private void Awake() { Instance = this; _openAction = Open; }
 
-        private void OnDestroy() { UnmuteGameUi(); if (_open) InputBlocker.Set(false); }
+        private void OnDisable()
+        {
+            if (_open || _unblockNextFrame)
+            {
+                if (_pending.Count > 0) ApplyPending();
+                _open = _unblockNextFrame = _restoreOnFocus = false;
+                _dropdown = _rebind = _sliderDrag = null;
+                _clearGuiFocus = true;
+                InputBlocker.Set(false); RestoreCursor();
+            }
+            UnmuteGameUi();
+        }
+
+        private void OnDestroy()
+        {
+            OnDisable();
+            Updates.Changed -= Catalog.Invalidate;
+            if (Instance == this) Instance = null;
+        }
 
         private void Start()
         {
             if (Plugin.CheckUpdatesEntry == null || Plugin.CheckUpdatesEntry.Value) StartCoroutine(Updates.Check(false));
-            Updates.Changed += () => Catalog.Invalidate();
+            Updates.Changed += Catalog.Invalidate;
+            if (Updates.PatcherRestartRequired) Open();
         }
 
         // ---------------------------------------------------------------- frame logic
         private void Update()
         {
-            if (_unblockNextFrame) { _unblockNextFrame = false; if (!_open) InputBlocker.Set(false); }
+            if (_unblockNextFrame)
+            {
+                if (ClosingInputHeld()) _releaseFrame = Time.frameCount + 1;
+                else if (Time.frameCount > _releaseFrame)
+                {
+                    _unblockNextFrame = false;
+                    if (!_open) { InputBlocker.Set(false); UnmuteGameUi(); }
+                }
+            }
             if (_open) TrackClicks();
             if (_open && _rebind != null) { PollRebind(); return; }
             if (Plugin.Pressed(Plugin.MenuKeyEntry.Value)) Toggle();
@@ -84,11 +121,12 @@ namespace Apocasetter
                 else if (_dropdown != null) _dropdown = null;
                 else Toggle();
             }
-            if (!_open) GameMenu.Tick(Open);
+            GameMenu.Tick(_openAction);
         }
 
         // The game's own menus (UGUI) must not react while the window is open: clicks on the window would otherwise reach
-        // the title menu below it (LOAD GAME, NEW GAME...). Every EventSystem is switched off and put back on close.
+        // the title menu below it (LOAD GAME, NEW GAME...). Dispatch guards in InputBlocker cover new/re-enabled
+        // systems too; this one-time disable clears any existing pointer/selection state without per-frame scans.
         private readonly List<EventSystem> _mutedEventSystems = new List<EventSystem>();
 
         private void MuteGameUi()
@@ -111,41 +149,66 @@ namespace Apocasetter
         {
             if (_open)
             {
-                Cursor.lockState = CursorLockMode.None; Cursor.visible = true;
-                if (Time.frameCount % 15 == 0) MuteGameUi();   // an EventSystem created later (scene load) is caught too
+                FreeCursor();
                 if (Time.timeScale != 0f && InputBlocker.Active) Time.timeScale = 0f;   // keep the game paused
                 return;
             }
-            if (_relockFrames > 0)
+            if (_restoreOnFocus)
             {
-                _relockFrames--;
-                if (InputBlocker.Active) { _relockFrames = 0; return; }
-                Cursor.lockState = CursorLockMode.None;
-                Cursor.lockState = _lastLock;
-                Cursor.visible = _lastVisible;
-                if (_relockFrames == 0) Plugin.Log.LogInfo("Cursor re-locked after focus regain (" + _lastLock + ")");
-                return;
+                _restoreOnFocus = false;
+                if (!InputBlocker.Active && !GameMenu.Paused && GameMenu.InGame)
+                { Cursor.lockState = _lastLock; Cursor.visible = _lastVisible; }
             }
             if (Application.isFocused && !InputBlocker.Active) { _lastLock = Cursor.lockState; _lastVisible = Cursor.visible; }
         }
 
         private void OnApplicationFocus(bool focus)
         {
-            if (!focus) { _relockFrames = 0; return; }
+            if (!focus) { _restoreOnFocus = false; return; }
             if (!_open && !InputBlocker.Active && _lastLock != CursorLockMode.None && Plugin.RestoreCursorEntry != null && Plugin.RestoreCursorEntry.Value)
-                _relockFrames = 3;
+                _restoreOnFocus = true;
+        }
+
+        private static void FreeCursor()
+        {
+            if (Cursor.lockState != CursorLockMode.None) Cursor.lockState = CursorLockMode.None;
+            if (!Cursor.visible) Cursor.visible = true;
+        }
+
+        private void RestoreCursor()
+        {
+            // Menus need a free pointer even if an earlier script left a stale lock behind.
+            if (!GameMenu.InGame || GameMenu.Paused) FreeCursor();
+            else { if (Cursor.lockState != _prevLock) Cursor.lockState = _prevLock; Cursor.visible = _prevVisible; }
+            _lastLock = Cursor.lockState; _lastVisible = Cursor.visible;
+        }
+
+        private static bool ClosingInputHeld()
+        {
+            foreach (var device in InputSystem.devices)
+            {
+                var mouse = device as Mouse;
+                if (mouse != null && (mouse.leftButton.isPressed || mouse.rightButton.isPressed || mouse.middleButton.isPressed || mouse.backButton.isPressed || mouse.forwardButton.isPressed)) return true;
+            }
+            var keyboard = Keyboard.current;
+            if (keyboard != null && (keyboard.escapeKey.isPressed || (Plugin.MenuKeyEntry.Value != Key.None && keyboard[Plugin.MenuKeyEntry.Value].isPressed))) return true;
+            // Legacy-only installations still need to drain the closing click/Escape.
+            return Input.GetMouseButton(0) || Input.GetMouseButton(1) || Input.GetMouseButton(2) || Input.GetKey(KeyCode.Escape);
         }
 
         public void Open() { if (!_open) Toggle(); }
 
         private void Toggle()
         {
+            if (_open && Updates.PatcherRestartRequired) return;
             _open = !_open;
             if (_open)
             {
+                _unblockNextFrame = false; _restoreOnFocus = false;
                 _prevLock = Cursor.lockState; _prevVisible = Cursor.visible;
                 InputBlocker.Set(true);
                 MuteGameUi();
+                FreeCursor();
                 Catalog.Invalidate();
                 _pending.Clear(); _errors.Clear(); _dropdown = null; _rebind = null; _removeOpen = false; _keyUsers = null;
                 _toastDismissed = true;
@@ -156,9 +219,11 @@ namespace Apocasetter
             else
             {
                 if (_pending.Count > 0) ApplyPending();
-                Cursor.lockState = _prevLock; Cursor.visible = _prevVisible;
-                UnmuteGameUi();
-                _unblockNextFrame = true; // keep blocking one more frame so the closing keypress isn't seen by the game
+                _dropdown = null; _rebind = null; _sliderDrag = null;
+                _clearGuiFocus = true;
+                RestoreCursor();
+                _releaseFrame = Time.frameCount + 1;
+                _unblockNextFrame = true; // release UI dispatch only after the closing input and its release frame
             }
         }
 
@@ -194,6 +259,7 @@ namespace Apocasetter
         // ---------------------------------------------------------------- OnGUI
         private void OnGUI()
         {
+            if (_clearGuiFocus) { GUIUtility.hotControl = 0; GUIUtility.keyboardControl = 0; _clearGuiFocus = false; }
             if (!_open) { GUI.depth = 0; DrawMenuExtras(); return; }
 
             // drawn above every other mod's OnGUI, so their controls can't take the window's clicks
@@ -212,7 +278,7 @@ namespace Apocasetter
             if ((type == EventType.Layout || type == EventType.Repaint) && (Cursor.lockState != CursorLockMode.None || !Cursor.visible))
             {
                 if (!_cursorForcedLogged) { _cursorForcedLogged = true; Plugin.Log.LogInfo("Mods window: something keeps locking/hiding the cursor (" + Cursor.lockState + ", visible " + Cursor.visible + "); freeing it every frame"); }
-                Cursor.lockState = CursorLockMode.None; Cursor.visible = true;
+                FreeCursor();
             }
             int hotBefore = GUIUtility.hotControl;
             var mouse = ev.mousePosition;
@@ -221,9 +287,12 @@ namespace Apocasetter
             S.Ensure(_sc);
             _wx = Mathf.Round((Screen.width - WW * _sc) / 2f);
             _wy = Mathf.Round((Screen.height - WH * _sc) / 2f);
+            var previousSkin = GUI.skin;
+            GUI.skin = S.Skin;
 
             try
             {
+                GUI.enabled = true; GUI.color = GUI.contentColor = GUI.backgroundColor = Color.white; GUI.matrix = Matrix4x4.identity;
                 // slider released: write the value once instead of on every drag frame
                 if (_sliderDrag != null && ev.rawType == EventType.MouseUp)
                 {
@@ -239,7 +308,7 @@ namespace Apocasetter
             }
             catch (ExitGUIException) { throw; }
             catch (Exception e) { DrawError("window", e, type); }
-            finally { GUI.enabled = true; GUI.color = Color.white; GUI.contentColor = Color.white; GUI.backgroundColor = Color.white; GUI.matrix = Matrix4x4.identity; }
+            finally { GUI.skin = previousSkin; GUI.enabled = true; GUI.color = Color.white; GUI.contentColor = Color.white; GUI.backgroundColor = Color.white; GUI.matrix = Matrix4x4.identity; }
 
             if (_lastDrawError != null && type == EventType.Repaint)
             {
@@ -250,6 +319,8 @@ namespace Apocasetter
                 Plugin.Verbose(type + " button " + ev.button + " at " + V(mouse) + " (Input.mousePosition " + V(Input.mousePosition) + ", screen " + Screen.width + "x" + Screen.height
                     + ", window " + R(0, 0, WW, WH) + ") → " + (ev.type == EventType.Used ? "handled by the window" : "not on a control") + ", hotControl " + hotBefore + "→" + GUIUtility.hotControl
                     + (GUI.enabled ? "" : ", GUI disabled"));
+            // Consume the rest of the overlay, including blank space and clicks outside the panel.
+            if (ev.type != EventType.Used && (ev.isMouse || ev.isKey || ev.type == EventType.ScrollWheel)) ev.Use();
         }
 
         private static string V(Vector2 v) { return "(" + v.x.ToString("0", CultureInfo.InvariantCulture) + ", " + v.y.ToString("0", CultureInfo.InvariantCulture) + ")"; }
@@ -381,11 +452,13 @@ namespace Apocasetter
 
             float x = WW - FR - 18;
             float cw = BW("CLOSE", 104); x -= cw;
-            if (S.PlankButton(R(x, FR + 14, cw, 42), "CLOSE", S.White)) Toggle();
+            if (S.PlankButton(R(x, FR + 14, cw, 42), "CLOSE", S.White, null, !Updates.PatcherRestartRequired)) Toggle();
 
             int updates = mods.Count(mm => Status(mm).Update);
-            int plugins = mods.Count(mm => mm.Kind == ModKind.Loaded);
+            int plugins = mods.Count(mm => mm.Kind == ModKind.Loaded && !mm.IsPatcher);
             string head = plugins + " PLUGINS";
+            int patchers = mods.Count(mm => mm.Kind == ModKind.Loaded && mm.IsPatcher);
+            if (patchers > 0) head += "  ·  " + patchers + (patchers == 1 ? " PATCHER" : " PATCHERS");
             if (Updates.Checking) head += "  ·  CHECKING FOR UPDATES…";
             else if (Updates.HaveIndex) head += "  ·  " + updates + (updates == 1 ? " UPDATE" : " UPDATES") + " ON GITHUB";
             else if (Updates.CheckError != null) head += "  ·  UPDATE CHECK FAILED";
@@ -409,6 +482,79 @@ namespace Apocasetter
 
         // ---------------------------------------------------------------- left rail
         private class Group { public string Title; public List<ModEntry> Items; }
+        private static readonly KeyValuePair<string, string>[] TrustFilters = {
+            new KeyValuePair<string, string>("official", "OFFICIAL"),
+            new KeyValuePair<string, string>("community", "COMMUNITY"),
+            new KeyValuePair<string, string>("unverified", "UNVERIFIED")
+        };
+
+        private static string TrustOf(ModEntry mod)
+        {
+            if (mod.Self) return "official";
+            var index = mod.Index;
+            string trust = index != null ? index.Trust : null;
+            if (string.Equals(trust, "official", StringComparison.OrdinalIgnoreCase)) return "official";
+            if (string.Equals(trust, "community", StringComparison.OrdinalIgnoreCase)) return "community";
+            return "unverified";
+        }
+
+        private bool MatchesTrust(ModEntry mod) { return _trustFilters.Contains(TrustOf(mod)); }
+
+        private float[] FilterWidths(KeyValuePair<string, string>[] chips)
+        {
+            var widths = chips.Select(c => BW(c.Value, 60, S.BtnSmall, 26)).ToArray();
+            float total = widths.Sum() + 2 * (chips.Length - 1);
+            if (total < RailW) { float extra = (RailW - total) / chips.Length; for (int i = 0; i < widths.Length; i++) widths[i] += extra; }
+            else { float k = (RailW - 2 * (chips.Length - 1)) / widths.Sum(); for (int i = 0; i < widths.Length; i++) widths[i] *= k; }
+            return widths;
+        }
+
+        private string DrawFilterRow(KeyValuePair<string, string>[] chips, float y, string selected)
+        {
+            var widths = FilterWidths(chips);
+            float cx = RailX;
+            for (int i = 0; i < chips.Length; i++)
+            {
+                bool on = selected == chips[i].Key;
+                if (S.PlankButton(R(cx, y, widths[i], 36), chips[i].Value, on ? S.Yellow : S.White, S.BtnSmall, true, on ? 1f : 0.62f))
+                { selected = chips[i].Key; _listScroll = Vector2.zero; }
+                cx += widths[i] + 2;
+            }
+            return selected;
+        }
+
+        private void DrawTrustFilters()
+        {
+            var widths = FilterWidths(TrustFilters);
+            float x = RailX;
+            for (int i = 0; i < TrustFilters.Length; i++)
+            {
+                var chip = TrustFilters[i];
+                bool on = _trustFilters.Contains(chip.Key);
+                if (S.PlankButton(R(x, BottomY - 44, widths[i], 36), chip.Value, on ? S.Yellow : S.White, S.BtnSmall, true, on ? 1f : 0.62f))
+                { if (on) _trustFilters.Remove(chip.Key); else _trustFilters.Add(chip.Key); _listScroll = Vector2.zero; }
+                x += widths[i] + 2;
+            }
+        }
+
+        private static string Ellipsize(string text, GUIStyle style, float width)
+        {
+            // Measure the translated text too (ApocaLanguage hooks GUIContent construction).
+            var content = new GUIContent(text ?? "");
+            text = content.text;
+            if (style.CalcSize(content).x <= width) return text;
+            const string dots = "…";
+            if (width <= 0 || style.CalcSize(new GUIContent(dots)).x > width) return "";
+            int low = 0, high = text.Length;
+            while (low < high)
+            {
+                int mid = (low + high + 1) / 2;
+                if (style.CalcSize(new GUIContent(text.Substring(0, mid) + dots)).x <= width) low = mid;
+                else high = mid - 1;
+            }
+            if (low > 0 && char.IsHighSurrogate(text[low - 1])) low--;
+            return text.Substring(0, low).TrimEnd() + dots;
+        }
 
         private void DrawRail(List<ModEntry> mods)
         {
@@ -421,25 +567,16 @@ namespace Apocasetter
             if (_search.Length == 0 && GUI.GetNameOfFocusedControl() != "apocasetter-search") S.Out(fieldR, "SEARCH MODS", LeftBtn(), S.Desc);
 
             // filter planks
-            int nUpd = mods.Count(m => IsUpdateListed(m)), nOther = mods.Count(m => m.Other || m.Kind == ModKind.Disabled);
-            var chips = new[] { new KeyValuePair<string, string>("all", "ALL " + mods.Count(m => m.Kind != ModKind.Available)),
+            DrawTrustFilters();
+            int nUpd = mods.Count(m => MatchesTrust(m) && IsUpdateListed(m)), nOther = mods.Count(m => MatchesTrust(m) && (m.Other || m.IsPatcher || m.Kind == ModKind.Disabled));
+            var chips = new[] { new KeyValuePair<string, string>("all", "ALL " + mods.Count(m => MatchesTrust(m) && m.Kind != ModKind.Available)),
                                 new KeyValuePair<string, string>("updates", "UPDATES " + nUpd),
                                 new KeyValuePair<string, string>("other", "OTHER " + nOther) };
-            var widths = chips.Select(c => BW(c.Value, 60, S.BtnSmall, 26)).ToArray();
-            float total = widths.Sum() + 2 * (chips.Length - 1);
-            if (total < RailW) { float extra = (RailW - total) / chips.Length; for (int i = 0; i < widths.Length; i++) widths[i] += extra; }
-            else { float k = (RailW - 2 * (chips.Length - 1)) / widths.Sum(); for (int i = 0; i < widths.Length; i++) widths[i] *= k; }
-            float cx = RailX;
-            for (int i = 0; i < chips.Length; i++)
-            {
-                bool on = _filter == chips[i].Key;
-                if (S.PlankButton(R(cx, TopY + 52, widths[i], 36), chips[i].Value, on ? S.Yellow : S.White, S.BtnSmall, true, on ? 1f : 0.62f)) { _filter = chips[i].Key; _listScroll = Vector2.zero; }
-                cx += widths[i] + 2;
-            }
+            _filter = DrawFilterRow(chips, TopY + 52, _filter);
 
             // groups
             var q = _search.Trim().ToLowerInvariant();
-            Func<ModEntry, bool> match = m => q.Length == 0 || (m.Name ?? "").ToLowerInvariant().Contains(q);
+            Func<ModEntry, bool> match = m => MatchesTrust(m) && (q.Length == 0 || (m.Name ?? "").ToLowerInvariant().Contains(q));
             var groups = new List<Group>();
             if (_filter == "updates")
             {
@@ -449,12 +586,14 @@ namespace Apocasetter
             else if (_filter == "other")
             {
                 groups.Add(new Group { Title = "OTHER PLUGINS", Items = mods.Where(m => m.Other).Where(match).ToList() });
+                groups.Add(new Group { Title = "PATCHERS", Items = mods.Where(m => m.IsPatcher && m.Kind == ModKind.Loaded).Where(match).ToList() });
                 groups.Add(new Group { Title = "DISABLED", Items = mods.Where(m => m.Kind == ModKind.Disabled).Where(match).ToList() });
             }
             else
             {
-                groups.Add(new Group { Title = "MODS", Items = mods.Where(m => m.Kind == ModKind.Loaded && m.OptedIn).Where(match).ToList() });
+                groups.Add(new Group { Title = "MODS", Items = mods.Where(m => m.Kind == ModKind.Loaded && m.OptedIn && !m.IsPatcher).Where(match).ToList() });
                 groups.Add(new Group { Title = "OTHER PLUGINS", Items = mods.Where(m => m.Other).Where(match).ToList() });
+                groups.Add(new Group { Title = "PATCHERS", Items = mods.Where(m => m.IsPatcher && m.Kind == ModKind.Loaded).Where(match).ToList() });
                 groups.Add(new Group { Title = "DISABLED", Items = mods.Where(m => m.Kind == ModKind.Disabled).Where(match).ToList() });
                 groups.Add(new Group { Title = "ON GITHUB", Items = mods.Where(m => m.Kind == ModKind.Available).Where(match).ToList() });
             }
@@ -462,7 +601,7 @@ namespace Apocasetter
 
             const float GH = 30, RH = 56;
             float contentH = groups.Sum(g => GH + g.Items.Count * (RH + 2)) + 8;
-            var view = R(RailX, TopY + 96, RailW, BottomY - 8 - (TopY + 96));
+            var view = R(RailX, TopY + 96, RailW, BottomY - 52 - (TopY + 96));
             var inner = new Rect(0, 0, view.width - U(14), U(contentH));
             _listScroll = GUI.BeginScrollView(view, _listScroll, inner, false, false, GUIStyle.none, S.ScrollV);
             try { DrawRailRows(groups, inner, GH, RH); }
@@ -524,17 +663,17 @@ namespace Apocasetter
             if (st.Badge != null)
             {
                 var bs = S.Tiny.CalcSize(new GUIContent(st.Badge));
-                badgeW = bs.x + U(12);
+                badgeW = Mathf.Min(bs.x + U(12), r.width * 0.45f);
                 var br = new Rect(r.xMax - badgeW - U(10), r.y + (r.height - U(20)) / 2, badgeW, U(20));
                 S.Fill(br, Color.black);
                 S.Fill(new Rect(br.x + 2, br.y + 2, br.width - 4, br.height - 4), st.BadgeBg);
-                S.Label(br, st.Badge, S.Tiny, st.BadgeFg);
+                S.Label(br, Ellipsize(st.Badge, S.Tiny, br.width - U(6)), S.Tiny, st.BadgeFg);
                 badgeW += U(14);
             }
             float tw = r.xMax - textX - badgeW - U(6);
             float alpha = m.Kind == ModKind.Loaded ? 1f : 0.8f;
-            S.Out(new Rect(textX, r.y + U(8), tw, U(22)), m.Name, S.ListName, Fade(sel ? S.Yellow : S.White, alpha));
-            S.Out(new Rect(textX, r.y + U(29), tw, U(18)), st.Sub, S.ListSub, Fade(sel ? S.Hex("E8E0D2") : S.Hex("BDB3A6"), alpha));
+            S.Out(new Rect(textX, r.y + U(8), tw, U(22)), Ellipsize(m.Name, S.ListName, tw), S.ListName, Fade(sel ? S.Yellow : S.White, alpha));
+            S.Out(new Rect(textX, r.y + U(29), tw, U(18)), Ellipsize(st.Sub, S.ListSub, tw), S.ListSub, Fade(sel ? S.Hex("E8E0D2") : S.Hex("BDB3A6"), alpha));
         }
 
         private static Color Fade(Color c, float a) { return new Color(c.r, c.g, c.b, c.a * a); }
@@ -599,7 +738,8 @@ namespace Apocasetter
                     if (!s.Update) { s.Badge = "DEPRECATED"; s.BadgeBg = S.Hex("2A2118"); s.BadgeFg = S.Hex("E8A33C"); }
                 }
             }
-            else if (m.Kind == ModKind.Loaded && Updates.HaveIndex) { s.NoSource = true; s.Sub += " · no update source"; }
+            else if (m.Kind == ModKind.Loaded && Updates.HaveIndex && !(m.IsPatcher && m.Self)) { s.NoSource = true; s.Sub += " · no update source"; }
+            if (m.IsPatcher) s.Sub += " · patcher";
             if (Updates.Downloading.TryGetValue(m.Guid, out prog)) { s.Downloading = true; s.Badge = "DOWNLOADING"; s.BadgeBg = S.Hex("111111"); s.BadgeFg = S.Yellow; }
             if (op != null)
             {
@@ -638,7 +778,7 @@ namespace Apocasetter
             float nameW = Mathf.Min(nameSize.x + U(4), R(x0, 0, w0, 0).xMax - nameX - verW - U(12));
             // the name sits under the header buttons, so it gets the full width of the pane
             var nameR = new Rect(nameX, _wy + U(TopY + 50), nameW, U(32));
-            S.Out(nameR, name, S.H1, S.White);
+            S.Out(nameR, Ellipsize(name, S.H1, nameR.width), S.H1, S.White);
             S.Out(new Rect(nameR.xMax + U(10), nameR.y + U(6), verW, U(24)), ver, S.BodyBold, S.Yellow);
             var meta = new List<string>();
             if (im != null && !string.IsNullOrEmpty(im.Repo)) meta.Add("github.com/" + im.Repo);
@@ -651,7 +791,7 @@ namespace Apocasetter
             // header buttons (right)
             float bx = x0 + w0;
             var buttons = new List<KeyValuePair<string, Action>>();
-            if (m.Kind == ModKind.Loaded && !m.Self && !st.Staged) buttons.Add(new KeyValuePair<string, Action>("REMOVE", () => { _removeOpen = true; _removeCfg = false; }));
+            if (m.Kind != ModKind.Available && !m.Self && !st.Staged) buttons.Add(new KeyValuePair<string, Action>("REMOVE", () => { _removeOpen = true; _removeCfg = false; }));
             if (m.Kind == ModKind.Available && !st.Staged && !st.Downloading && im != null && im.Zip != null) buttons.Add(new KeyValuePair<string, Action>("INSTALL " + im.Version, () => Install(m)));
             if (m.Kind == ModKind.Disabled && !st.Staged) buttons.Add(new KeyValuePair<string, Action>("ENABLE", () => { StageSimple(m, "enable", null, false); if (im != null) ProvideRequirements(m, im); }));
             if (im != null && !string.IsNullOrEmpty(im.Repo)) buttons.Add(new KeyValuePair<string, Action>("GITHUB", () => Application.OpenURL("https://github.com/" + im.Repo)));
@@ -712,6 +852,8 @@ namespace Apocasetter
             }
             S.Fill(R(PaneX + 2, y + 39, PaneW - 4, 2), S.Line);
             y += 44;
+            if (_tab == "settings" && m.Entries.Count > 0 && (!m.Other || _showOther.Contains(m.Guid)))
+                y += DrawSectionTabs(m, x0, y, w0);
 
             // content
             var area = R(x0, y, w0, (BottomY - 8 - 16) - y);
@@ -1022,6 +1164,50 @@ namespace Apocasetter
         }
 
         // ---------------------------------------------------------------- settings tab
+        // A horizontal strip keeps even mods with many sections from pushing settings out of the pane.
+        // Search still spans every section; choosing a tab returns to that section's full settings.
+        private float DrawSectionTabs(ModEntry m, float x, float y, float width)
+        {
+            if (!ReferenceEquals(_sectionMod, m))
+            {
+                _sectionMod = m;
+                _sectionEntries = m.Entries.GroupBy(e => e.Definition.Section)
+                    .Select(group => new KeyValuePair<string, List<ConfigEntryBase>>(group.Key, group.ToList())).ToList();
+                _sections = _sectionEntries.Select(section => section.Key).ToList();
+                if (!_sectionSelections.TryGetValue(m.Guid, out _section) || !_sections.Contains(_section))
+                    _section = _sections.FirstOrDefault(s => string.Equals(s, "General", StringComparison.OrdinalIgnoreCase))
+                        ?? _sections.FirstOrDefault(s => s.IndexOf("debug", StringComparison.OrdinalIgnoreCase) < 0) ?? _sections[0];
+                _sectionScroll = Vector2.zero;
+            }
+            float total = 0;
+            foreach (var section in _sections) total += S.Tab.CalcSize(new GUIContent(section.ToUpperInvariant())).x + U(24);
+            bool overflow = total > U(width);
+            var view = R(x, y + 3, width, overflow ? 53 : 36);
+            _sectionScroll = GUI.BeginScrollView(view, _sectionScroll, new Rect(0, 0, Mathf.Max(total, view.width), U(32)), overflow, false, S.ScrollH, GUIStyle.none);
+            try
+            {
+                float tx = 0;
+                foreach (var section in _sections)
+                {
+                    string label = section.ToUpperInvariant();
+                    float tw = S.Tab.CalcSize(new GUIContent(label)).x + U(24);
+                    var tr = new Rect(tx, 0, tw, U(32));
+                    bool on = _section == section && _settingSearch.Trim().Length == 0;
+                    if (GUI.Button(tr, new GUIContent("", label), S.Invisible))
+                    {
+                        ApplyPending(); _section = section; _sectionSelections[m.Guid] = section;
+                        _settingSearch = ""; _rightScroll = Vector2.zero; _dropdown = null; _rebind = null;
+                        GUI.FocusControl(null);
+                    }
+                    S.Out(tr, label, S.Tab, on ? S.Yellow : S.Sub);
+                    if (on) S.Fill(new Rect(tr.x, tr.yMax - U(3), tr.width - U(10), U(2)), S.Yellow);
+                    tx += tw;
+                }
+            }
+            finally { GUI.EndScrollView(); }
+            return overflow ? 58 : 41;
+        }
+
         private void DrawSettings(ModEntry m, IndexMod im, float cw)
         {
             if (m.Kind != ModKind.Loaded) { DrawAbout(m, im, cw); return; }
@@ -1038,23 +1224,16 @@ namespace Apocasetter
             if (m.Config == null || m.Entries.Count == 0)
             {
                 GUILayout.Space(U(16));
-                WrapLabel("This plugin has no settings.", S.Body, S.Desc, cw);
+                WrapLabel(m.IsPatcher ? "This preloader patcher exposes no settings to the Mods window. Any config files found are listed under Files." : "This plugin has no settings.", S.Body, S.Desc, cw);
                 return;
             }
             if (_keyUsers == null) _keyUsers = BuildKeyUsers();
 
             var q = _settingSearch.Trim().ToLowerInvariant();
             int shown = 0;
-            var sections = new List<KeyValuePair<string, List<ConfigEntryBase>>>();
-            foreach (var e in m.Entries)
+            foreach (var kv in _sectionEntries)
             {
-                var sec = e.Definition.Section;
-                var list = sections.FirstOrDefault(kv => kv.Key == sec).Value;
-                if (list == null) { list = new List<ConfigEntryBase>(); sections.Add(new KeyValuePair<string, List<ConfigEntryBase>>(sec, list)); }
-                list.Add(e);
-            }
-            foreach (var kv in sections)
-            {
+                if (q.Length == 0 && kv.Key != _section) continue;
                 var rows = kv.Value.Where(e => q.Length == 0 || e.Definition.Key.ToLowerInvariant().Contains(q) || Human(e.Definition.Key).ToLowerInvariant().Contains(q)
                                                || Desc(e).ToLowerInvariant().Contains(q) || kv.Key.ToLowerInvariant().Contains(q)).ToList();
                 if (rows.Count == 0) continue;
@@ -1062,35 +1241,10 @@ namespace Apocasetter
                 var hr = GUILayoutUtility.GetRect(cw, U(26), GUILayout.Width(cw), GUILayout.Height(U(26)));
                 var titleW = S.Section.CalcSize(new GUIContent(kv.Key.ToUpperInvariant())).x;
                 S.Out(new Rect(hr.x, hr.y, titleW + U(4), hr.height), kv.Key.ToUpperInvariant(), S.Section, S.White);
-                // Debug sections start folded; clicking the header opens/closes them (a search shows them anyway)
-                bool debug = kv.Key.IndexOf("debug", StringComparison.OrdinalIgnoreCase) >= 0 && q.Length == 0;
-                bool debugOpen = _debugOpen.Contains(m.Guid + "|" + kv.Key);
-                var cnt = rows.Count + (rows.Count == 1 ? " setting" : " settings") + (debug ? (debugOpen ? " · HIDE" : " · SHOW") : "");
+                var cnt = rows.Count + (rows.Count == 1 ? " setting" : " settings");
                 var cntW = S.Small.CalcSize(new GUIContent(cnt)).x;
                 S.Fill(new Rect(hr.x + titleW + U(14), hr.center.y, hr.width - titleW - cntW - U(28), U(2)), S.Line);
-                S.Label(new Rect(hr.xMax - cntW, hr.y, cntW, hr.height), cnt, S.Small, debug && hr.Contains(Event.current.mousePosition) ? S.White : S.Dim);
-                if (debug)
-                {
-                    if (GUI.Button(hr, GUIContent.none, GUIStyle.none))
-                    {
-                        if (debugOpen) _debugOpen.Remove(m.Guid + "|" + kv.Key); else _debugOpen.Add(m.Guid + "|" + kv.Key);
-                        debugOpen = !debugOpen;
-                    }
-                    if (!debugOpen) continue;
-                }
-
-                bool collapsed = rows.Count > 40 && q.Length == 0 && !_showAll.Contains(m.Guid + "|" + kv.Key);
-                if (collapsed)
-                {
-                    GUILayout.BeginHorizontal();
-                    float sw = U(BW("SHOW ALL", 140));
-                    var lr = GUILayoutUtility.GetRect(cw - sw - U(10), U(44), GUILayout.Width(cw - sw - U(10)), GUILayout.Height(U(44)));
-                    S.Label(lr, rows.Count + " entries. Too many to list here; they're in the .cfg file.", S.Small, S.Desc);
-                    var br = GUILayoutUtility.GetRect(sw, U(40), GUILayout.Width(sw), GUILayout.Height(U(40)));
-                    if (S.PlankButton(br, "SHOW ALL", S.White)) _showAll.Add(m.Guid + "|" + kv.Key);
-                    GUILayout.EndHorizontal();
-                    continue;
-                }
+                S.Label(new Rect(hr.xMax - cntW, hr.y, cntW, hr.height), cnt, S.Small, S.Dim);
                 foreach (var e in rows) { DrawEntry(m, e, cw); shown++; }
             }
             if (shown == 0) { GUILayout.Space(U(16)); WrapLabel("No setting matches.", S.Body, S.Sub, cw); }
@@ -1158,7 +1312,8 @@ namespace Apocasetter
             GUILayout.FlexibleSpace();
 
             // controls (right, top-aligned)
-            var ctrl = GUILayoutUtility.GetRect(ctrlW, U(isKey ? 58 : 42), GUILayout.Width(ctrlW), GUILayout.Height(U(isKey ? 58 : 42)));
+            bool updateFrequency = ReferenceEquals(e, Plugin.UpdateFrequencyEntry);
+            var ctrl = GUILayoutUtility.GetRect(ctrlW, U(isKey || updateFrequency ? 58 : 42), GUILayout.Width(ctrlW), GUILayout.Height(U(isKey || updateFrequency ? 58 : 42)));
             float right = ctrl.xMax;
             // reset rivet
             var rr = new Rect(right - U(30), ctrl.y + U(5), U(30), U(30));
@@ -1212,9 +1367,8 @@ namespace Apocasetter
                 float cur = Convert.ToSingle(e.BoxedValue, CultureInfo.InvariantCulture);
                 float fv = isPending ? ParseF(pending, cur) : cur;
                 var field = new Rect(right - U(76), ctrl.y + U(2), U(76), U(34));
-                var rail = new Rect(field.x - U(184), ctrl.y + U(17), U(168), U(4));
-                S.Fill(new Rect(rail.x, rail.y + U(1), rail.width, rail.height), Color.black);
-                S.Fill(rail, S.Hex("D9D4CB"));
+                var rail = new Rect(field.x - U(184), ctrl.y + U(12), U(168), U(14));
+                S.CableTrack(rail);
                 var thumb = KnobStyle();
                 float nfv = GUI.HorizontalSlider(new Rect(rail.x, ctrl.y + U(9), rail.width, U(20)), fv, fmin, fmax, GUIStyle.none, thumb);
                 if (Math.Abs(nfv - fv) > 1e-6f)
@@ -1225,6 +1379,8 @@ namespace Apocasetter
                 var text = isPending ? pending : e.GetSerializedValue();
                 var nt = GUI.TextField(field, text, 16, NumField());
                 if (nt != text) { if (nt == e.GetSerializedValue()) _pending.Remove(e); else _pending[e] = nt; }
+                if (updateFrequency)
+                    S.Label(new Rect(rail.x, ctrl.y + U(36), rail.width, U(18)), fv <= 0 ? "Each time" : "Every " + Mathf.RoundToInt(fv) + " h", S.Small, S.Sub);
             }
             else
             {
@@ -1350,6 +1506,12 @@ namespace Apocasetter
             }
             if (im != null && im.Tags.Count > 0) AboutRow("Tags", string.Join(", ", im.Tags.ToArray()), cw);
             AboutRow("Plugin ID", m.Guid, cw);
+            if (m.IsPatcher)
+            {
+                AboutRow("Type", "BepInEx preloader patcher", cw);
+                if (m.Self) WrapLabel("Included with Apocasetter. Its installer is managed by Apocasetter updates.", S.Body, S.Desc, cw);
+                else WrapLabel("Preloader patches are applied before normal plugins. Setting changes take effect after a restart. DLL changes are applied at the next start, followed by one further restart before playing.", S.Body, S.Desc, cw);
+            }
 
             if (m.Kind != ModKind.Loaded)
             {
@@ -1439,10 +1601,11 @@ namespace Apocasetter
             GUILayout.BeginHorizontal();
             float w1 = U(BW("OPEN PLUGIN FOLDER", 210)), w2 = U(BW("OPEN CONFIG FILE", 190)), w3 = U(BW("DISABLE", 120));
             var b1 = GUILayoutUtility.GetRect(w1, U(40), GUILayout.Width(w1), GUILayout.Height(U(40)));
-            if (S.PlankButton(b1, "OPEN PLUGIN FOLDER", S.White)) OpenPath(folder ?? Paths.PluginPath);
+            if (S.PlankButton(b1, "OPEN PLUGIN FOLDER", S.White)) OpenPath(folder ?? (m.IsPatcher ? Paths.PatcherPluginPath : Paths.PluginPath));
             GUILayout.Space(U(6));
             var b2 = GUILayoutUtility.GetRect(w2, U(40), GUILayout.Width(w2), GUILayout.Height(U(40)));
-            if (S.PlankButton(b2, "OPEN CONFIG FILE", S.White, null, m.Config != null)) OpenPath(m.Config.ConfigFilePath);
+            string configPath = m.Config != null ? m.Config.ConfigFilePath : m.ConfigPaths().FirstOrDefault(File.Exists);
+            if (S.PlankButton(b2, "OPEN CONFIG FILE", S.White, null, configPath != null)) OpenPath(configPath);
             if (!m.Self)
             {
                 GUILayout.Space(U(6));
@@ -1476,6 +1639,14 @@ namespace Apocasetter
         {
             float y = BottomY + 4;
             float right = WW - FR - 16;
+            if (Updates.PatcherRestartRequired)
+            {
+                float quitWidth = BW("QUIT TO FINISH PATCHERS", 250);
+                var notice = R(RailX, y, right - RailX - quitWidth - 12, 40);
+                S.Out(notice, Ellipsize("Patcher files changed. Quit and restart once more before playing.", S.BodyBold, notice.width), S.BodyBold, S.Yellow);
+                if (S.PlankButton(R(right - quitWidth, y - 1, quitWidth, 42), "QUIT TO FINISH PATCHERS", S.Yellow)) Application.Quit();
+                return;
+            }
             if (Updates.Ops.Count > 0)
             {
                 float qw = BW("QUIT GAME TO APPLY", 226);
@@ -1489,7 +1660,8 @@ namespace Apocasetter
                     return k == "update" ? n + " → " + MiniJson.Str(o, "version") : k + " " + n;
                 }).ToArray();
                 var uw = S.Small.CalcSize(new GUIContent("Undo all")).x;
-                S.Out(new Rect(bar.x + U(26), bar.y, bar.width - U(40) - uw, bar.height), "WAITING FOR A RESTART: " + string.Join(" · ", items), S.BodyBold, S.Yellow);
+                float statusWidth = bar.width - U(40) - uw;
+                S.Out(new Rect(bar.x + U(26), bar.y, statusWidth, bar.height), Ellipsize("WAITING FOR A RESTART: " + string.Join(" · ", items), S.BodyBold, statusWidth), S.BodyBold, S.Yellow);
                 var ur = new Rect(bar.xMax - uw - U(12), bar.y, uw, bar.height);
                 S.Label(ur, "Undo all", S.Small, S.White);
                 S.Fill(new Rect(ur.x, ur.center.y + U(8), uw, 1), S.White);
@@ -1510,7 +1682,7 @@ namespace Apocasetter
             x -= lw + 6;
             if (S.PlankButton(R(x, y - 1, lw, 42), "RELOAD FROM FILE", S.White, null, mod != null && mod.Config != null))
             { _pending.Clear(); _errors.Clear(); mod.Config.Reload(); SetStatus("Reloaded " + Path.GetFileName(mod.Config.ConfigFilePath)); }
-            S.Out(R(RailX, y, x - RailX - 12, 40), status, S.Small, Updates.InstallerPresent ? S.Desc : S.Hex("FF8A78"));
+            S.Out(R(RailX, y, x - RailX - 12, 40), Ellipsize(status, S.Small, U(x - RailX - 12)), S.Small, Updates.InstallerPresent ? S.Desc : S.Hex("FF8A78"));
         }
 
         private string LastResultsText()
@@ -1532,9 +1704,11 @@ namespace Apocasetter
             var cfgs = m.ConfigPaths();
             var deps = m.Dependents();
             var hardDeps = HardDependents(m);
-            float rw = BW("REMOVE", 130), dw = BW("DISABLE INSTEAD", 190), cw2 = BW("CANCEL", 120);
+            bool loaded = m.Kind == ModKind.Loaded;
+            float rw = BW("REMOVE", 130), dw = loaded ? BW("DISABLE INSTEAD", 190) : 0, cw2 = BW("CANCEL", 120);
             float w = Mathf.Max(620, rw + dw + cw2 + 12 + 60);
-            string intro = m.Name + " " + m.Version + " keeps running until you quit. On the next start its files are moved to BepInEx\\cache\\Apocasetter\\removed\\, so you can put them back.";
+            string intro = m.Name + " " + m.Version + (loaded ? " keeps running until you quit. On the next start its files are moved" : " is already disabled. On the next start its disabled copy is moved") + " to BepInEx\\cache\\Apocasetter\\removed\\, so you can put it back.";
+            if (loaded && (m.IsPatcher || m.CompanionPaths.Count > 0)) intro += " Preloader file changes need one further restart after the installer applies them.";
             float introH = S.Body.CalcHeight(new GUIContent(intro), U(w - 76)) / _sc;
             bool depRow = deps.Count > 0 || hardDeps.Count > 0;
             float h = 70 + introH + 18 + plugin.Count * 24 + 24 + 54 + (depRow ? 50 : 0) + 70;
@@ -1575,7 +1749,8 @@ namespace Apocasetter
             }
             float bx = x + w - 30;
             bx -= rw; bool doRemove = S.PlankButton(R(bx, cy + 8, rw, 44), "REMOVE", S.Red);
-            bx -= dw + 6; bool doDisable = S.PlankButton(R(bx, cy + 8, dw, 44), "DISABLE INSTEAD", S.White);
+            bool doDisable = false;
+            if (loaded) { bx -= dw + 6; doDisable = S.PlankButton(R(bx, cy + 8, dw, 44), "DISABLE INSTEAD", S.White); }
             bx -= cw2 + 6; bool cancel = S.PlankButton(R(bx, cy + 8, cw2, 44), "CANCEL", S.White);
             if (cancel) _removeOpen = false;
             if (doDisable || doRemove)
@@ -1641,7 +1816,6 @@ namespace Apocasetter
         private GUIStyle _badgeFont;
         private void DrawMenuExtras()
         {
-            if (!GameMenu.ButtonOnScreen && !GameMenu.HasButton && (GameMenu.MenuVisible || (!GameMenu.InGame && Cursor.visible))) DrawFallbackButton();
             if (Plugin.UpdateNoticeEntry != null && !Plugin.UpdateNoticeEntry.Value) return;
             var rects = GameMenu.VisibleButtonRects();
             if (rects.Count == 0) return;
@@ -1697,17 +1871,6 @@ namespace Apocasetter
             float by = pit.yMax + U(10);
             if (S.PlankButton(new Rect(box.x + U(14), by, (w - U(32)) / 2, U(40)), "LATER", S.White)) _toastDismissed = true;
             if (S.PlankButton(new Rect(box.x + U(18) + (w - U(32)) / 2, by, (w - U(32)) / 2, U(40)), "OPEN MODS", S.Yellow)) { _toastDismissed = true; _filter = updates.Count > 0 ? "updates" : "all"; Open(); }
-        }
-
-        private GUIStyle _hintStyle;
-        // Used only when no native menu button could be cloned.
-        private void DrawFallbackButton()
-        {
-            Theme.Apply();
-            if (_hintStyle == null || _hintStyle.font != GUI.skin.font)
-                _hintStyle = new GUIStyle(GUI.skin.button) { fontSize = 22, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter, fixedHeight = 0 };
-            var r = new Rect(Screen.width - 190, 24, 160, 46);
-            if (GUI.Button(r, "MODS", _hintStyle)) Open();
         }
 
         // ---------------------------------------------------------------- keys

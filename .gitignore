@@ -10,3 +10,8 @@ obj/
 # BepInEx / game artefacts
 LogOutput.log
 *.cfg
+# Generated runtime verification evidence and isolated installer fixtures
+verification/artifacts/
+verification/fixtures-*/
+verification/*-results.txt
+verification/*.png

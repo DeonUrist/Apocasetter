@@ -34,7 +34,7 @@ namespace Apocasetter
         public List<string> Skip = new List<string>();
     }
 
-    public class DisabledMod { public string Guid, Name, Version, Dir; }
+    public class DisabledMod { public string Guid, Name, Version, Dir; public List<string> Files = new List<string>(); }
 
     public static class Updates
     {
@@ -54,6 +54,7 @@ namespace Apocasetter
         public static readonly List<DisabledMod> Disabled = new List<DisabledMod>();
         public static List<Dictionary<string, object>> LastResults = new List<Dictionary<string, object>>();
         public static bool InstallerPresent;
+        public static bool PatcherRestartRequired;
         public static string InstallerPath;
         public static event Action Changed;
 
@@ -88,7 +89,14 @@ namespace Apocasetter
             catch (Exception e) { Plugin.Log.LogWarning("Index cache unreadable: " + e.Message); }
         }
 
-        public static bool CacheFresh { get { return HaveIndex && (DateTime.UtcNow - IndexTimeUtc).TotalHours < CacheHours; } }
+        public static bool CacheFresh
+        {
+            get
+            {
+                double hours = Plugin.UpdateFrequencyEntry != null ? Plugin.UpdateFrequencyEntry.Value : CacheHours;
+                return HaveIndex && hours > 0 && (DateTime.UtcNow - IndexTimeUtc).TotalHours < hours;
+            }
+        }
 
         public static IEnumerator Check(bool force)
         {
@@ -338,7 +346,7 @@ namespace Apocasetter
                     var mf = Path.Combine(d, "manifest.json");
                     if (!File.Exists(mf)) continue;
                     var m = MiniJson.Obj(MiniJson.Parse(File.ReadAllText(mf)));
-                    Disabled.Add(new DisabledMod { Guid = MiniJson.Str(m, "guid"), Name = MiniJson.Str(m, "name"), Version = MiniJson.Str(m, "version"), Dir = d });
+                    Disabled.Add(new DisabledMod { Guid = MiniJson.Str(m, "guid"), Name = MiniJson.Str(m, "name"), Version = MiniJson.Str(m, "version"), Dir = d, Files = MiniJson.StrList(m, "files") });
                 }
                 catch (Exception e) { Plugin.Log.LogWarning("Disabled mod manifest unreadable in " + d + ": " + e.Message); }
             }
@@ -350,7 +358,10 @@ namespace Apocasetter
             try
             {
                 if (!File.Exists(p)) return;
-                var r = MiniJson.Arr(MiniJson.Obj(MiniJson.Parse(File.ReadAllText(p))), "results");
+                var document = MiniJson.Obj(MiniJson.Parse(File.ReadAllText(p)));
+                PatcherRestartRequired = MiniJson.Bool(document, "patcherRestartRequired", false)
+                    && MiniJson.Int(document, "patcherRestartProcess", -1) == System.Diagnostics.Process.GetCurrentProcess().Id;
+                var r = MiniJson.Arr(document, "results");
                 if (r != null) foreach (var o in r) { var d = MiniJson.Obj(o); if (d != null) LastResults.Add(d); }
                 var shown = Path.Combine(DataDir, "last-install.shown.json");
                 if (File.Exists(shown)) File.Delete(shown);

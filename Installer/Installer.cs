@@ -6,6 +6,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using BepInEx;
 using BepInEx.Logging;
+using BepInEx.Preloader.Patching;
 using Mono.Cecil;
 
 namespace Apocasetter.Installer
@@ -27,8 +28,19 @@ namespace Apocasetter.Installer
     // =====================================================================
     public static class Patcher
     {
-        public const string VERSION = "2.0.0";
+        public const string VERSION = "2.0.1";
         public static IEnumerable<string> TargetDLLs { get { return new string[0]; } }
+        public static readonly HashSet<string> CompletedPatchers = new HashSet<string>(StringComparer.Ordinal);
+        public static void Finish()
+        {
+            foreach (var patcher in AssemblyPatcher.PatcherPlugins)
+                try
+                {
+                    var type = patcher.TargetDLLs.Method.DeclaringType;
+                    CompletedPatchers.Add(type.Assembly.FullName + "|" + type.FullName);
+                }
+                catch { }
+        }
         public static void Patch(AssemblyDefinition assembly) { }
 
         private static ManualLogSource _log;
@@ -52,6 +64,7 @@ namespace Apocasetter.Installer
             var ops = MiniJson.Arr(doc, "ops") ?? new List<object>();
             _log.LogInfo("Apocasetter.Installer " + VERSION + ": " + ops.Count + " staged operation(s)");
             var results = new List<object>();
+            var patchersBefore = PatcherSnapshot();
             foreach (var o in ops)
             {
                 var op = MiniJson.Obj(o);
@@ -84,11 +97,40 @@ namespace Apocasetter.Installer
                     { "version", MiniJson.Str(op, "version") }, { "ok", ok }, { "message", msg }
                 });
             }
+            var patchersAfter = PatcherSnapshot();
+            bool patchersChanged = patchersBefore.Count != patchersAfter.Count || patchersBefore.Any(kv => !patchersAfter.ContainsKey(kv.Key) || patchersAfter[kv.Key] != kv.Value);
+            if (patchersChanged)
+            {
+                // BepInEx has already loaded patcher assemblies by Initialize. Do not execute a mixture
+                // of old/incomplete preloader code: stop third-party patching for this transition launch.
+                // The Mods window requires a clean restart before gameplay; the next scan sees the new files.
+                foreach (var patcher in AssemblyPatcher.PatcherPlugins)
+                {
+                    string path;
+                    try { path = patcher.TargetDLLs.Method.DeclaringType.Assembly.Location; } catch { continue; }
+                    if (!Inside(path, Full(Paths.PatcherPluginPath)) || IsSelf(path)) continue;
+                    patcher.Initializer = null; patcher.Finalizer = null; patcher.Patcher = null;
+                    patcher.TargetDLLs = EmptyTargets;
+                }
+                _log.LogInfo("Preloader files changed. Quit and restart once more to finish applying them before playing.");
+            }
             File.WriteAllText(Path.Combine(_data, "last-install.json"), MiniJson.Write(new Dictionary<string, object>
             {
-                { "time", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ") }, { "results", results }
+                { "time", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ") }, { "results", results }, { "patcherRestartRequired", patchersChanged },
+                { "patcherRestartProcess", System.Diagnostics.Process.GetCurrentProcess().Id }
             }));
             File.Delete(pendingPath);
+        }
+
+        private static IEnumerable<string> EmptyTargets() { return new string[0]; }
+
+        private static Dictionary<string, string> PatcherSnapshot()
+        {
+            var snapshot = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (Directory.Exists(Paths.PatcherPluginPath))
+                foreach (var path in Directory.GetFiles(Paths.PatcherPluginPath, "*.dll", SearchOption.AllDirectories))
+                    if (!IsSelf(path)) snapshot[Full(path)] = Sha256(path);
+            return snapshot;
         }
 
         // ---------------------------------------------------------------- update / install
@@ -166,8 +208,14 @@ namespace Apocasetter.Installer
                         }
                         else written.Add(dest);
                         Directory.CreateDirectory(Path.GetDirectoryName(dest));
-                        using (var src = kv.Key.Open())
-                        using (var dst = File.Create(dest)) src.CopyTo(dst);
+                        var temp = dest + ".apocasetter-writing";
+                        try
+                        {
+                            using (var src = kv.Key.Open())
+                            using (var dst = File.Create(temp)) src.CopyTo(dst);
+                            if (File.Exists(dest)) File.Replace(temp, dest, null); else File.Move(temp, dest);
+                        }
+                        finally { if (File.Exists(temp)) File.Delete(temp); }
                         files++;
                     }
                 }
@@ -175,7 +223,7 @@ namespace Apocasetter.Installer
             catch
             {
                 // roll back: restore replaced files, delete new ones, put the old DLL back
-                foreach (var kv in backedUp) try { File.Copy(kv.Value, kv.Key, true); } catch (Exception x) { _log.LogError("rollback: " + x.Message); }
+                foreach (var kv in backedUp) try { AtomicRestore(kv.Value, kv.Key); } catch (Exception x) { _log.LogError("rollback: " + x.Message); }
                 foreach (var p in written) try { if (File.Exists(p)) File.Delete(p); } catch (Exception x) { _log.LogError("rollback: " + x.Message); }
                 foreach (var kv in moved) try { if (!File.Exists(kv.Key)) File.Move(kv.Value, kv.Key); } catch (Exception x) { _log.LogError("rollback: " + x.Message); }
                 throw;
@@ -201,7 +249,7 @@ namespace Apocasetter.Installer
                 {
                     var p = Full(p0);
                     if (!Inside(p, _root)) throw new Exception("refusing to move a path outside BepInEx: " + p0);
-                    if (IsSelf(p) || p.IndexOf(Path.DirectorySeparatorChar + "patchers" + Path.DirectorySeparatorChar + "Apocasetter", StringComparison.OrdinalIgnoreCase) >= 0)
+                    if (IsSelf(p) || (Directory.Exists(p) && Inside(typeof(Patcher).Assembly.Location, p)))
                         throw new Exception("refusing to move Apocasetter's own installer");
                     if (!File.Exists(p) && !Directory.Exists(p)) continue;
                     var dest = Path.Combine(target, Rel(p));
@@ -250,6 +298,17 @@ namespace Apocasetter.Installer
         }
 
         // ---------------------------------------------------------------- helpers
+        private static void AtomicRestore(string source, string destination)
+        {
+            string temp = destination + ".apocasetter-rollback";
+            try
+            {
+                File.Copy(source, temp, true);
+                if (File.Exists(destination)) File.Replace(temp, destination, null); else File.Move(temp, destination);
+            }
+            finally { if (File.Exists(temp)) File.Delete(temp); }
+        }
+
         private static string Full(string p) { return Path.GetFullPath(p).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); }
         private static bool Inside(string p, string root)
         {

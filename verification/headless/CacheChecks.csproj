@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <LangVersion>latest</LangVersion>
+    <GameDir Condition="'$(GameDir)' == ''">E:\SteamLibrary\steamapps\common\Apocalypter</GameDir>
+    <CoreDir>$(GameDir)\BepInEx\core</CoreDir>
+    <ManagedDir>$(GameDir)\Apocalypter_Data\Managed</ManagedDir>
+    <OutputPath>..\artifacts\headless\bin\$(Configuration)\</OutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Apocasetter"><HintPath>..\..\bin\Release\Apocasetter.dll</HintPath><Private>true</Private></Reference>
+    <Reference Include="Apocasetter.Installer"><HintPath>..\..\Installer\bin\Release\Apocasetter.Installer.dll</HintPath><Private>true</Private><Aliases>installer</Aliases></Reference>
+    <Reference Include="Mono.Cecil"><HintPath>$(CoreDir)\Mono.Cecil.dll</HintPath><Private>true</Private></Reference>
+    <Reference Include="BepInEx.Preloader"><HintPath>$(CoreDir)\BepInEx.Preloader.dll</HintPath><Private>true</Private></Reference>
+    <Reference Include="BepInEx"><HintPath>$(CoreDir)\BepInEx.dll</HintPath><Private>true</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath><Private>true</Private></Reference>
+    <Reference Include="UnityEngine"><HintPath>$(ManagedDir)\UnityEngine.dll</HintPath><Private>true</Private></Reference>
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+  </ItemGroup>
+</Project>

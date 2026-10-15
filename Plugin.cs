@@ -10,6 +10,7 @@ using HarmonyLib;
 using HutongGames.PlayMaker;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
@@ -34,6 +35,7 @@ namespace Apocasetter
         public static ConfigEntry<Key> MenuKeyEntry;
         public static ConfigEntry<bool> RestoreCursorEntry;
         public static ConfigEntry<bool> CheckUpdatesEntry, UpdateNoticeEntry, VerboseLogEntry;
+        public static ConfigEntry<int> UpdateFrequencyEntry;
         public static bool IsVerbose { get { return VerboseLogEntry != null && VerboseLogEntry.Value; } }
         public static void Verbose(string msg) { if (IsVerbose) Log.LogInfo("[verbose] " + msg); }
         private static GameObject _runner;
@@ -47,13 +49,16 @@ namespace Apocasetter
                 "Re-lock and hide the mouse cursor when the game window regains focus (Alt+Tab) if it was locked before. Unity drops the lock on focus loss and the game only sets it on menu transitions, so the cursor otherwise stays on screen.");
 
             CheckUpdatesEntry = Config.Bind("Updates", "CheckForUpdates", true,
-                "Once per game start (results kept for 6 hours), download the Apocasetter index from GitHub and compare it with your installed mods. Nothing about you or your PC is sent.");
+                "Check for mod updates at game start, reusing cached results according to UpdateFrequency. Nothing about you or your PC is sent.");
+            UpdateFrequencyEntry = Config.Bind("Updates", "UpdateFrequency", 6, new ConfigDescription(
+                "How long to reuse update results, in hours (0-48). 0 = Each time: check on every game start. The default is 6 hours. CHECK FOR UPDATES always checks immediately.",
+                new AcceptableValueRange<int>(0, 48)));
             UpdateNoticeEntry = Config.Bind("Updates", "UpdateNotice", true,
                 "Show a badge on the MODS button and a short message on the title screen when an update is found.");
             VerboseLogEntry = Config.Bind("Debug", "VerboseLog", false,
                 "Write extra lines to BepInEx\\LogOutput.log while the Mods window is open: every click and whether the window received it, the mouse cursor state, screen size and scaling, and which other mods draw on screen. Turn it on only when you are asked for a log, then send LogOutput.log.");
 
-            SceneManager.sceneLoaded += (s, m) => EnsureRunner("scene " + s.name);
+            SceneManager.sceneLoaded += (s, m) => { GameMenu.Invalidate(); EnsureRunner("scene " + s.name); };
             InputBlocker.Install();
             Theme.Load(Info.Location);
             GameSkin.Init(Info.Location);
@@ -116,6 +121,27 @@ namespace Apocasetter
                 }
             }
             Plugin.Log.LogInfo("Input blocker: patched " + patched + " PlayMaker input action methods");
+            // Guard dispatch itself: disabling an EventSystem alone leaves a race with scene loads,
+            // other mods re-enabling it, or an input module already processing this frame.
+            PatchUi(harmony, typeof(EventSystem), "Update", "BeforeGameUiUpdate");
+            PatchUi(harmony, typeof(Button), "Press", "SkipWhenActive");
+            PatchUi(harmony, typeof(PlayMakerUiEventBase), "SendEvent", "SkipWhenActive");
+            PatchUi(harmony, typeof(HutongGames.PlayMaker.Actions.UiButtonOnClickEvent), "DoOnClick", "SkipWhenActive");
+        }
+
+        private static void PatchUi(Harmony harmony, Type type, string method, string guard)
+        {
+            var target = AccessTools.DeclaredMethod(type, method);
+            if (target == null) throw new MissingMethodException(type.FullName, method);
+            harmony.Patch(target, prefix: new HarmonyMethod(typeof(InputBlocker), guard));
+        }
+
+        private static bool BeforeGameUiUpdate()
+        {
+            // Poll before UGUI dispatch so the opening press cannot also click a menu underneath.
+            // This path and the runner's Update never depend on IMGUI's Event.current.
+            GameMenu.PollClick();
+            return !Active;
         }
 
         private static bool SkipWhenActive() { return !Active; }
@@ -125,20 +151,29 @@ namespace Apocasetter
             if (on == Active) return;
             Active = on;
             if (on) { _savedTimeScale = Time.timeScale; Time.timeScale = 0f; }
-            else { Time.timeScale = _savedTimeScale <= 0f ? 1f : _savedTimeScale; }
+            else { Time.timeScale = _savedTimeScale; }
         }
     }
 
     // =====================================================================
     //  Game menu helpers + the native-looking "MODS" button
     // =====================================================================
-    public static class GameMenu
+    public static partial class GameMenu
     {
         private static PlayMakerFSM _menuFsm;
         private static GameObject _menuRoot;
         private static float _nextSearch;
+        private static GameObject _gameManager;
+        private static bool _searchedGameManager;
 
-        public static bool InGame { get { return GameObject.Find("__GameManager__") != null; } }
+        public static bool InGame
+        {
+            get
+            {
+                if (!_searchedGameManager) { _gameManager = GameObject.Find("__GameManager__"); _searchedGameManager = true; }
+                return _gameManager != null;
+            }
+        }
 
         /// true while the game's own ESC pause menu is up
         public static bool Paused
@@ -147,7 +182,7 @@ namespace Apocasetter
             {
                 if (_menuFsm == null)
                 {
-                    var gm = GameObject.Find("__GameManager__");
+                    var gm = InGame ? _gameManager : null;
                     if (gm == null) return false;
                     _menuFsm = gm.GetComponents<PlayMakerFSM>().FirstOrDefault(f => f.FsmName == "Menu");
                 }
@@ -191,210 +226,11 @@ namespace Apocasetter
             }
         }
 
-        public static void Invalidate() { _menuFsm = null; _menuRoot = null; }
-
-        // ---------------------------------------------------------------- MODS button
-        // The game has more than one menu canvas (the title screen and the ESC menu are different objects that
-        // both contain a "Settings" button), so every enabled canvas that shows game menu buttons gets its own clone.
-        private static readonly string[] TemplateNames = { "Settings", "Credits", "Tutorial", "Codex", "Quit", "Quit_To_Menu", "Exit", "Options" };
-        private class Slot { public Canvas Canvas; public GameObject Button; public Button[] GameButtons = new Button[0]; public bool Shown; }
-        private static readonly List<Slot> _slots = new List<Slot>();
-        private static float _nextScan;
-        private static bool _loggedCanvases;
-
-        public static bool HasButton { get { return _slots.Any(x => x.Button != null); } }
-
-        private static bool IsMenuButton(Button b, GameObject ours)
+        public static void Invalidate()
         {
-            if (b == null || !b.isActiveAndEnabled) return false;
-            if (ours != null && (b.gameObject == ours || b.transform.IsChildOf(ours.transform))) return false;
-            var n = b.gameObject.name;
-            return TemplateNames.Any(t => string.Equals(t, n, StringComparison.OrdinalIgnoreCase));
+            _menuFsm = null; _menuRoot = null; _searchedGameManager = false;
+            _nextSearch = 0; _nextScan = 0; _rectFrame = -1;
         }
 
-        /// Called every frame from the runner.
-        public static void Tick(Action onClick)
-        {
-            if (Time.unscaledTime < _nextScan) return;
-            _nextScan = Time.unscaledTime + 0.25f;
-            _slots.RemoveAll(x => x.Canvas == null);
-
-            // find every enabled canvas that currently shows a game menu button
-            Canvas[] canvases;
-            try { canvases = UnityEngine.Object.FindObjectsOfType<Canvas>(); } catch { return; }
-            if (!_loggedCanvases)
-            {
-                _loggedCanvases = true;
-                var sb = new System.Text.StringBuilder("Canvases at first scan:\n");
-                foreach (var c in canvases)
-                    sb.AppendLine("   " + Path(c.transform) + " enabled=" + c.enabled + " mode=" + c.renderMode + " scale=" + c.transform.lossyScale.x.ToString("0.##")
-                        + " buttons=" + string.Join(",", c.GetComponentsInChildren<Button>(false).Select(x => x.gameObject.name).ToArray()));
-                Plugin.Log.LogInfo(sb.ToString());
-            }
-            foreach (var c in canvases)
-            {
-                if (c == null || !c.enabled || !c.isActiveAndEnabled || c.transform.lossyScale.x <= 0.0001f) continue;
-                var slot = _slots.FirstOrDefault(x => x.Canvas == c);
-                if (slot == null)
-                {
-                    var buttons = c.GetComponentsInChildren<Button>(true);
-                    if (!buttons.Any(x => IsMenuButton(x, null))) continue;
-                    slot = new Slot { Canvas = c };
-                    _slots.Add(slot);
-                    Inject(slot, onClick);
-                }
-                slot.GameButtons = c.GetComponentsInChildren<Button>(true);
-            }
-
-            // show/hide each clone with its canvas
-            foreach (var slot in _slots)
-            {
-                if (slot.Button == null) continue;
-                var c = slot.Canvas;
-                bool vis = c.enabled && c.isActiveAndEnabled && c.transform.lossyScale.x > 0.0001f && slot.GameButtons.Any(x => IsMenuButton(x, slot.Button));
-                if (vis != slot.Button.activeSelf) slot.Button.SetActive(vis);
-                if (vis && !slot.Shown) { slot.Button.transform.SetAsLastSibling(); Plugin.Log.LogInfo("MODS button shown on " + Path(c.transform) + " " + Diag(slot)); }
-                slot.Shown = vis;
-            }
-        }
-
-        private static string Path(Transform t)
-        {
-            var s = t.name;
-            while (t.parent != null) { t = t.parent; s = t.name + "/" + s; }
-            return s;
-        }
-
-        private static void Inject(Slot slot, Action onClick)
-        {
-            var canvas = slot.Canvas.gameObject;
-            try
-            {
-                var template = canvas.GetComponentsInChildren<Button>(true)
-                    .OrderBy(b => { var i = Array.FindIndex(TemplateNames, n => string.Equals(n, b.gameObject.name, StringComparison.OrdinalIgnoreCase)); return i < 0 ? 99 : i; })
-                    .FirstOrDefault();
-                if (template == null) { Plugin.Log.LogWarning("MODS button: no template button under " + canvas.name); return; }
-
-                var go = UnityEngine.Object.Instantiate(template.gameObject, canvas.transform);
-                go.name = "Apocasetter_Mods";
-                // strip the game's logic (PlayMaker FSMs, nested confirm dialogs, arrows...)
-                foreach (var f in go.GetComponentsInChildren<PlayMakerFSM>(true)) UnityEngine.Object.DestroyImmediate(f);
-                foreach (var f in go.GetComponentsInChildren<PlayMakerProxyBase>(true)) UnityEngine.Object.DestroyImmediate(f);
-                for (int i = go.transform.childCount - 1; i >= 0; i--)
-                {
-                    var c = go.transform.GetChild(i);
-                    bool isText = c.GetComponentInChildren<Text>(true) != null || c.GetComponentInChildren<TMPro.TMP_Text>(true) != null;
-                    bool isGraphic = c.GetComponent<Graphic>() != null;
-                    if (!isText && !isGraphic) UnityEngine.Object.DestroyImmediate(c.gameObject);
-                    else c.gameObject.SetActive(true);
-                }
-                foreach (var tx in go.GetComponentsInChildren<Text>(true))
-                {
-                    tx.text = Caps(tx.text) ? "MODS" : "Mods";
-                    if (tx.font != null) GameSkin.SetGameFont(tx.font);
-                }
-                foreach (var tx in go.GetComponentsInChildren<TMPro.TMP_Text>(true))
-                    if (tx.font != null && tx.font.sourceFontFile != null) GameSkin.SetGameFont(tx.font.sourceFontFile);
-                try
-                {
-                    var img = template.GetComponent<Image>();
-                    Plugin.Log.LogInfo("MODS button template: sprite '" + (img != null && img.sprite != null ? img.sprite.name : "-") + "', font '"
-                        + string.Join(",", go.GetComponentsInChildren<Text>(true).Select(t => t.font != null ? t.font.name : "-").ToArray()) + "' / TMP '"
-                        + string.Join(",", go.GetComponentsInChildren<TMPro.TMP_Text>(true).Select(t => t.font != null ? t.font.name : "-").ToArray()) + "'");
-                }
-                catch { }
-                foreach (var tx in go.GetComponentsInChildren<TMPro.TMP_Text>(true)) tx.text = Caps(tx.text) ? "MODS" : "Mods";
-
-                var btn = go.GetComponentInChildren<Button>(true);
-                btn.onClick = new Button.ButtonClickedEvent();
-                btn.onClick.AddListener(() => onClick());
-                btn.interactable = true;
-                var cg = go.GetComponent<CanvasGroup>(); if (cg != null) { cg.alpha = 1; cg.interactable = true; cg.blocksRaycasts = true; }
-
-                // ignore any layout group and pin to the top-right corner of the canvas
-                var le = go.GetComponent<LayoutElement>() ?? go.AddComponent<LayoutElement>();
-                le.ignoreLayout = true;
-                var rt = go.GetComponent<RectTransform>();
-                var trt = template.GetComponent<RectTransform>();
-                var size = trt != null ? trt.rect.size : new Vector2(200, 50);
-                if (size.x < 10 || size.y < 10) size = new Vector2(300, 55);
-                rt.anchorMin = new Vector2(1, 1); rt.anchorMax = new Vector2(1, 1); rt.pivot = new Vector2(1, 1);
-                rt.sizeDelta = size;
-                rt.anchoredPosition = new Vector2(-30, -30);
-                rt.localScale = Vector3.one;
-                go.transform.SetAsLastSibling();
-                go.SetActive(false);
-
-                slot.Button = go;
-                Plugin.Log.LogInfo("MODS button injected under " + Path(canvas.transform) + " (template '" + template.gameObject.name + "', " + (int)size.x + "x" + (int)size.y + ")");
-            }
-            catch (Exception e)
-            {
-                Plugin.Log.LogWarning("MODS button injection failed on " + canvas.name + ": " + e);
-                if (slot.Button != null) UnityEngine.Object.Destroy(slot.Button);
-                slot.Button = null;
-            }
-        }
-
-        /// IMGUI rects (top-left origin) of every MODS button currently on screen.
-        public static List<Rect> VisibleButtonRects()
-        {
-            var list = new List<Rect>();
-            foreach (var slot in _slots)
-            {
-                if (slot.Button == null || !slot.Button.activeInHierarchy) continue;
-                var c = slot.Canvas;
-                if (c == null || !c.enabled || !c.isActiveAndEnabled) continue;
-                var r = ScreenRect(slot.Button.GetComponent<RectTransform>(), c);
-                if (r.width < 2 || r.height < 2 || r.xMax <= 0 || r.yMax <= 0 || r.xMin >= Screen.width || r.yMin >= Screen.height) continue;
-                list.Add(new Rect(r.x, Screen.height - r.yMax, r.width, r.height));
-            }
-            return list;
-        }
-
-        /// True when a native MODS button is currently drawn somewhere inside the screen.
-        public static bool ButtonOnScreen
-        {
-            get
-            {
-                foreach (var slot in _slots)
-                {
-                    if (slot.Button == null || !slot.Button.activeInHierarchy) continue;
-                    var c = slot.Canvas;
-                    if (c == null || !c.enabled || !c.isActiveAndEnabled) continue;
-                    var r = ScreenRect(slot.Button.GetComponent<RectTransform>(), c);
-                    if (r.xMax > 0 && r.yMax > 0 && r.xMin < Screen.width && r.yMin < Screen.height && r.width > 1 && r.height > 1) return true;
-                }
-                return false;
-            }
-        }
-
-        private static Rect ScreenRect(RectTransform rt, Canvas c)
-        {
-            var corners = new Vector3[4]; rt.GetWorldCorners(corners);
-            var cam = c.renderMode == RenderMode.ScreenSpaceOverlay ? null : c.worldCamera;
-            var min = new Vector2(float.MaxValue, float.MaxValue); var max = new Vector2(float.MinValue, float.MinValue);
-            foreach (var w in corners)
-            {
-                Vector2 p = cam != null ? (Vector2)cam.WorldToScreenPoint(w) : (Vector2)w;
-                min = Vector2.Min(min, p); max = Vector2.Max(max, p);
-            }
-            return Rect.MinMaxRect(min.x, min.y, max.x, max.y);
-        }
-
-        private static string Diag(Slot slot)
-        {
-            try
-            {
-                var c = slot.Canvas;
-                var crt = c.GetComponent<RectTransform>();
-                return "canvas=" + c.renderMode + " sort=" + c.sortingOrder + " rect=" + (int)crt.rect.width + "x" + (int)crt.rect.height
-                     + " scale=" + crt.lossyScale.x.ToString("0.###") + " button=" + ScreenRect(slot.Button.GetComponent<RectTransform>(), c)
-                     + " screen=" + Screen.width + "x" + Screen.height;
-            }
-            catch (Exception e) { return "diag failed: " + e.Message; }
-        }
-
-        private static bool Caps(string s) { return string.IsNullOrEmpty(s) || s == s.ToUpperInvariant(); }
     }
 }

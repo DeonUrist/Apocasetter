@@ -18,11 +18,12 @@ namespace Apocasetter
         public ModKind Kind;
         public PluginInfo Info;
         public ConfigFile Config;
-        public bool OptedIn, Self;
+        public bool OptedIn, Self, IsPatcher;
+        public readonly List<string> CompanionPaths = new List<string>();
         public List<ConfigEntryBase> Entries = new List<ConfigEntryBase>();
         public DisabledMod DisabledInfo;
         public IndexMod Index { get { return Updates.Find(Guid); } }
-        public bool Other { get { return Kind == ModKind.Loaded && !OptedIn; } }
+        public bool Other { get { return Kind == ModKind.Loaded && !OptedIn && !IsPatcher; } }
 
         private bool _iconTried;
         private Texture2D _icon;
@@ -49,13 +50,13 @@ namespace Apocasetter
             }
         }
 
-        /// BepInEx\plugins\<Folder> when the mod lives in its own folder, else null (single DLL in plugins)
+        /// The mod's own top-level folder under plugins or patchers; null for a loose DLL.
         public string PluginFolder
         {
             get
             {
                 if (string.IsNullOrEmpty(Location)) return null;
-                var plugins = Path.GetFullPath(Paths.PluginPath).TrimEnd('\\', '/');
+                var plugins = Path.GetFullPath(IsPatcher ? Paths.PatcherPluginPath : Paths.PluginPath).TrimEnd('\\', '/');
                 var dir = Path.GetFullPath(Path.GetDirectoryName(Location)).TrimEnd('\\', '/');
                 if (string.Equals(dir, plugins, StringComparison.OrdinalIgnoreCase)) return null;
                 if (!dir.StartsWith(plugins + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return null;
@@ -68,8 +69,13 @@ namespace Apocasetter
         public List<string> PluginPaths()
         {
             var r = new List<string>();
+            if (Kind == ModKind.Disabled)
+            {
+                if (DisabledInfo != null) r.Add(DisabledInfo.Dir);
+                return r;
+            }
             var folder = PluginFolder;
-            if (folder != null) { r.Add(folder); return r; }
+            if (folder != null) { r.Add(folder); r.AddRange(CompanionPaths); return r.Distinct(StringComparer.OrdinalIgnoreCase).ToList(); }
             if (string.IsNullOrEmpty(Location)) return r;
             r.Add(Location);
             foreach (var ext in new[] { ".pdb", ".xml", ".png" })
@@ -77,6 +83,7 @@ namespace Apocasetter
                 var p = Path.ChangeExtension(Location, ext);
                 if (File.Exists(p)) r.Add(p);
             }
+            r.AddRange(CompanionPaths);
             return r;
         }
 
@@ -87,10 +94,19 @@ namespace Apocasetter
             try
             {
                 if (Config != null && File.Exists(Config.ConfigFilePath)) r.Add(Config.ConfigFilePath);
+                foreach (var entry in Entries)
+                    if (File.Exists(entry.ConfigFile.ConfigFilePath) && !r.Contains(entry.ConfigFile.ConfigFilePath)) r.Add(entry.ConfigFile.ConfigFilePath);
+                var primary = Path.Combine(Paths.ConfigPath, Guid + ".cfg");
+                if (File.Exists(primary) && !r.Contains(primary)) r.Add(primary);
                 foreach (var f in Directory.GetFiles(Paths.ConfigPath, Guid + ".*.cfg")) if (!r.Contains(f)) r.Add(f);
-                var names = new[] { Name, PluginFolder != null ? Path.GetFileName(PluginFolder) : null, Location != null ? Path.GetFileNameWithoutExtension(Location) : null };
+                var names = new List<string> { Name, PluginFolder != null ? Path.GetFileName(PluginFolder) : null, Location != null ? Path.GetFileNameWithoutExtension(Location) : null };
+                if (DisabledInfo != null)
+                    foreach (var file in DisabledInfo.Files)
+                        names.Add(Directory.Exists(Path.Combine(DisabledInfo.Dir, file)) ? Path.GetFileName(file) : Path.GetFileNameWithoutExtension(file));
                 foreach (var n in names.Where(x => !string.IsNullOrEmpty(x)).Distinct(StringComparer.OrdinalIgnoreCase))
                 {
+                    var namedConfig = Path.Combine(Paths.ConfigPath, n + ".cfg");
+                    if (File.Exists(namedConfig) && !r.Contains(namedConfig)) r.Add(namedConfig);
                     var d = Path.Combine(Paths.ConfigPath, n);
                     if (Directory.Exists(d) && !r.Contains(d)) r.Add(d);
                 }
@@ -155,9 +171,11 @@ namespace Apocasetter
                     }
                 list.Add(m);
             }
+            PatcherCatalog.AddTo(list);
             foreach (var d in Updates.Disabled)
                 if (!list.Any(x => x.Guid == d.Guid))
-                    list.Add(new ModEntry { Guid = d.Guid, Name = d.Name, Version = d.Version, Kind = ModKind.Disabled, DisabledInfo = d });
+                    list.Add(new ModEntry { Guid = d.Guid, Name = d.Name, Version = d.Version, Kind = ModKind.Disabled, DisabledInfo = d,
+                        IsPatcher = d.Files.Any(file => file.Replace('\\', '/').StartsWith("patchers/", StringComparison.OrdinalIgnoreCase)) });
             foreach (var im in Updates.Index.Values)
                 if (!im.Blocked && !im.Deprecated && !list.Any(x => x.Guid == im.Guid))   // deprecated mods are no longer offered for install
                     list.Add(new ModEntry { Guid = im.Guid, Name = im.Name, Version = null, Kind = ModKind.Available });

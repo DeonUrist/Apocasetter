@@ -24,12 +24,14 @@ namespace Apocasetter
         public static Texture2D Rust, Chains, RebarH, RebarV, Plank, PlankHover, PlankDown, Knob, Rivet, Slot, Hazard, Px, Track, Thumb, Field;
         public static GUIStyle Value, NumberField;
         public static GUIStyle Title, H1, Btn, BtnSmall, Section, Tab, Body, BodyBold, Small, Tiny, ListName, ListSub, TextField, PlankStyle,
-            Invisible, ScrollV, ScrollThumb, Mono;
+            Invisible, ScrollV, ScrollThumb, ScrollH, Mono;
+        public static GUISkin Skin;
 
         private static Font _display, _body, _bold;
         private static bool _loaded;
         private static float _builtFor = -1;
         private static readonly List<UnityEngine.Object> _keep = new List<UnityEngine.Object>();
+        private static Texture2D _cable;
 
         public static void Init(string pluginDll)
         {
@@ -53,9 +55,15 @@ namespace Apocasetter
             Px = Solid(Color.white);
             Slot = Boxed(16, Hex("8F8A83"), Hex("060504"), 2);
             Field = Boxed(16, Hex("5C544B"), Hex("050403"), 2);
-            Track = Boxed(8, Hex("120E0C"), Hex("120E0C"), 0);
-            Thumb = Boxed(8, Hex("6A6158"), Hex("8F8A83"), 1);
             Hazard = Stripes();
+            _cable = new Texture2D(256, 24, TextureFormat.RGBA32, false) { hideFlags = HideFlags.HideAndDontSave, filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
+            var cablePixels = SteelCable.Pixels(256, 24);
+            _cable.SetPixels(cablePixels); _cable.Apply(); _keep.Add(_cable);
+            var verticalPixels = new Color[cablePixels.Length];
+            for (int y = 0; y < 256; y++) for (int x = 0; x < 24; x++) verticalPixels[y * 24 + x] = cablePixels[(23 - x) * 256 + y];
+            Thumb = new Texture2D(24, 256, TextureFormat.RGBA32, false) { hideFlags = HideFlags.HideAndDontSave, filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
+            Thumb.SetPixels(verticalPixels); Thumb.Apply(); _keep.Add(Thumb);
+            Track = Tint(Thumb, 0.38f);
             try
             {
                 _body = Font.CreateDynamicFontFromOSFont(new[] { "Segoe UI", "Segoe UI Symbol", "Arial" }, 14);
@@ -122,13 +130,33 @@ namespace Apocasetter
             CenterText(NumberField, "0");
 
             Invisible = new GUIStyle(GUIStyle.none);
-            ScrollV = new GUIStyle(GUI.skin.verticalScrollbar) { fixedWidth = F(8), border = new RectOffset(2, 2, 2, 2), margin = new RectOffset(F(4), 0, 0, 0) };
+            ScrollV = new GUIStyle(GUI.skin.verticalScrollbar) { fixedWidth = F(10), border = new RectOffset(0, 0, 12, 12), margin = new RectOffset(F(4), 0, 0, 0) };
             ScrollV.normal.background = Track;
-            ScrollThumb = new GUIStyle(GUI.skin.verticalScrollbarThumb) { fixedWidth = F(8), border = new RectOffset(2, 2, 2, 2) };
+            ScrollThumb = new GUIStyle(GUI.skin.verticalScrollbarThumb) { fixedWidth = F(10), border = new RectOffset(0, 0, 12, 12) };
             ScrollThumb.normal.background = Thumb; ScrollThumb.hover.background = Thumb; ScrollThumb.active.background = Thumb;
+            ScrollH = new GUIStyle(GUI.skin.horizontalScrollbar) { fixedHeight = F(10), border = new RectOffset(12, 12, 0, 0) };
+            ScrollH.normal.background = _cable;
+            var horizontalThumb = new GUIStyle(GUI.skin.horizontalScrollbarThumb) { fixedHeight = F(10), border = new RectOffset(12, 12, 0, 0) };
+            horizontalThumb.normal.background = _cable; horizontalThumb.hover.background = _cable; horizontalThumb.active.background = _cable;
+            if (Skin != null) UnityEngine.Object.Destroy(Skin);
+            Skin = UnityEngine.Object.Instantiate(GUI.skin);
+            Skin.hideFlags = HideFlags.HideAndDontSave;
+            Skin.verticalScrollbar = ScrollV; Skin.verticalScrollbarThumb = ScrollThumb;
+            Skin.horizontalScrollbar = ScrollH; Skin.horizontalScrollbarThumb = horizontalThumb;
+            Skin.verticalScrollbarUpButton = new GUIStyle(); Skin.verticalScrollbarDownButton = new GUIStyle();
+            Skin.horizontalScrollbarLeftButton = new GUIStyle(); Skin.horizontalScrollbarRightButton = new GUIStyle();
         }
 
         // ---------------------------------------------------------------- drawing helpers
+        public static void CableTrack(Rect r)
+        {
+            // One cached texture, including cut/frayed ends; no per-frame strand drawing or allocations.
+            var old = GUI.color;
+            GUI.color = new Color(0, 0, 0, 0.8f);
+            GUI.DrawTexture(new Rect(r.x, r.y + 2 * S, r.width, r.height), _cable);
+            GUI.color = Color.white; GUI.DrawTexture(r, _cable); GUI.color = old;
+        }
+
         public static void Fill(Rect r, Color c)
         {
             var old = GUI.color; GUI.color = c; GUI.DrawTexture(r, Px); GUI.color = old;
